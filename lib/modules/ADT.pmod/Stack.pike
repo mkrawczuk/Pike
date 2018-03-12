@@ -7,8 +7,16 @@
 //! current size, i.e. pushing an element on an full 32 slot stack will
 //! result in a 64 slot stack with 33 elements.
 
-int ptr;
-array arr;
+// NB: There's apparently quite a bit of code that accesses these
+//     directly, so they can't be made protected directly.
+//     Any accesses to ptr should be replaced with sizeof(),
+//     and any to arr with values().
+//
+//     The pragma is to be removed when ptr and arr are declared protected.
+#pragma no_deprecation_warnings
+
+__deprecated__(int) ptr;
+__deprecated__(array) arr;
 
 //! Push an element on the top of the stack.
 void push(mixed val)
@@ -131,9 +139,10 @@ protected int _search(mixed item)
   return -1;
 }
 
-//! A stack added with another stack yields a third
-//! a third stack will all the stack elements from
-//! the two first stacks.
+//! A stack added with another stack yields a new
+//! stack with all the elements from both stacks,
+//! and the elements from the second stack at the
+//! top of the new stack.
 this_program `+(this_program s) {
   array elem = arr[..ptr-1]+values(s);
   this_program ns = this_program(1);

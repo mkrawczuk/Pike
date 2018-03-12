@@ -46,8 +46,6 @@ PMOD_EXPORT const char msg_unset_onerr_nosync_1[] =
   "Last SET_ONERROR is from %s\n";
 PMOD_EXPORT const char msg_unset_onerr_nosync_2[] =
   "UNSET_ONERROR out of sync. No Pike_interpreter.recoveries left.\n";
-PMOD_EXPORT const char msg_assert_onerr[] =
-  "%s ASSERT_ONERROR(%p) failed\n";
 #endif
 PMOD_EXPORT const char msg_bad_arg[] =
   "Bad argument %d to %s(). Expected %s.\n";
@@ -65,7 +63,6 @@ PMOD_EXPORT const char msg_div_by_zero[] =
  */
 
 #ifdef PIKE_DEBUG
-/* struct mapping *recovery_lookup = NULL; */
 
 PMOD_EXPORT void check_recovery_context(void)
 {
@@ -80,14 +77,9 @@ PMOD_EXPORT void check_recovery_context(void)
     fprintf(stderr, "Last recovery was added at %s:%d\n",
 	    Pike_interpreter.recoveries->file,
 	    Pike_interpreter.recoveries->line);
-    push_int((ptrdiff_t)Pike_interpreter.recoveries);
-/*     if ((s = low_mapping_lookup(recovery_lookup, Pike_sp-1))) { */
-/*       fprintf(stderr, "Try also looking at %s.\n", (char*)s->u.integer); */
-/*     } */
-    pop_stack();
     Pike_fatal("Recoveries is out biking (Pike_interpreter.recoveries=%p, C sp=%p, %ld)!\n",
-	  Pike_interpreter.recoveries, &foo,
-          (long)TESTILITEST);
+               Pike_interpreter.recoveries, &foo,
+               (long)TESTILITEST);
   }
 
   /* Add more stuff here when required */
@@ -120,14 +112,6 @@ PMOD_EXPORT JMP_BUF *init_recovery(JMP_BUF *r, size_t stack_pop_levels DEBUG_INI
   r->severity=THROW_ERROR;
   Pike_interpreter.recoveries=r;
   check_recovery_context();
-#ifdef PIKE_DEBUG
-/*   if (recovery_lookup && Pike_sp) { */
-/*     push_int((ptrdiff_t)r); */
-/*     push_int((ptrdiff_t)location); */
-/*     mapping_insert(recovery_lookup, Pike_sp-2, Pike_sp-1); */
-/*     pop_n_elems(2); */
-/*   } */
-#endif
   return r;
 }
 
@@ -239,7 +223,7 @@ PMOD_EXPORT DECLSPEC(noreturn) void pike_throw(void) ATTRIBUTE((noreturn))
     LOW_LONGJMP(Pike_interpreter.recoveries->recovery,1);
 }
 
-PMOD_EXPORT void push_error(const char *description)
+static void push_error(const char *description)
 {
   push_text(description);
   f_backtrace(0);
@@ -571,8 +555,6 @@ PMOD_EXPORT DECLSPEC(noreturn) void debug_fatal(const char *fmt, ...) ATTRIBUTE(
   va_end (args);
 }
 
-#if 1
-
 /*! @class MasterObject
  */
 
@@ -694,7 +676,7 @@ static void f_error_index(INT32 args)
       apply_current (generic_err_backtrace_fun, 0);
       break;
     default:
-      index_error("`[]", Pike_sp-args, args, NULL, Pike_sp-args,
+      index_error("`[]", args, NULL, Pike_sp-args,
 		  "Index %"PRINTPIKEINT"d is out of range 0..1.\n", ind);
       break;
   }
@@ -882,10 +864,8 @@ static void f_error_create(INT32 args)
   DWERROR("%s(): Throwing a " #FEL " error\n", func); \
   o=fast_clone_object(PIKE_CONCAT(FEL,_error_program))
 
-#define ERROR_DONE(FOO) \
-  PIKE_CONCAT(FOO,_error_va(o,func, \
-			      base_sp, args, \
-			      desc, &foo)); \
+#define ERROR_DONE() \
+  generic_error_va(o,func, base_sp, args, desc, &foo); \
   va_end(foo)
 
 #define ERROR_STRUCT(STRUCT,O) \
@@ -942,19 +922,13 @@ PMOD_EXPORT DECLSPEC(noreturn) void generic_error_va(
     init_string_builder(&s, 0);
     string_builder_vsprintf(&s, fmt, *fmt_args);
 
-#if 0
-    if (!master_program) {
-      fprintf(stderr, "ERROR: %s\n", s.s->str);
-    }
-#endif
-
     if (err->error_message) free_string(err->error_message);
     err->error_message = finish_string_builder(&s);
   }
 
   f_backtrace(0);
 
-  if(func)
+  if(func && base_sp)
   {
     int i;
     push_int(0);
@@ -996,50 +970,50 @@ PMOD_EXPORT DECLSPEC(noreturn) void generic_error_va(
 /* coverity[+kill] */
 PMOD_EXPORT DECLSPEC(noreturn) void throw_error_object(
   struct object *o,
-  const char *func,
-  struct svalue *base_sp,  int args,
+  const char *func, int args,
   const char *desc, ...) ATTRIBUTE((noreturn))
 {
+  const struct svalue *base_sp = Pike_sp - args;
   va_list foo;
   va_start(foo,desc);
   ASSERT_THREAD_SWAPPED_IN();
   DWERROR("%s(): Throwing an error object\n", func);
-  ERROR_DONE(generic);
+  ERROR_DONE();
 }
 
 /* coverity[+kill] */
 PMOD_EXPORT DECLSPEC(noreturn) void generic_error(
   const char *func,
-  struct svalue *base_sp,  int args,
+  const struct svalue *base_sp,  int args,
   const char *desc, ...) ATTRIBUTE((noreturn))
 {
   INIT_ERROR(generic);
-  ERROR_DONE(generic);
+  ERROR_DONE();
 }
 
 /* coverity[+kill] */
 PMOD_EXPORT DECLSPEC(noreturn) void index_error(
-  const char *func,
-  struct svalue *base_sp,  int args,
+  const char *func, int args,
   struct svalue *value,
   struct svalue *index,
   const char *desc, ...) ATTRIBUTE((noreturn))
 {
+  const struct svalue *base_sp = Pike_sp - args;
   INIT_ERROR(index);
   ERROR_COPY_SVALUE(index, value);
   ERROR_COPY_SVALUE(index, index);
-  ERROR_DONE(generic);
+  ERROR_DONE();
 }
 
 /* coverity[+kill] */
 PMOD_EXPORT DECLSPEC(noreturn) void bad_arg_error(
-  const char *func,
-  struct svalue *base_sp,  int args,
+  const char *func, int args,
   int which_argument,
   const char *expected_type,
   struct svalue *got_value,
   const char *desc, ...)  ATTRIBUTE((noreturn))
 {
+  const struct svalue *base_sp = args>=0 ? Pike_sp-args : NULL;
   INIT_ERROR(bad_argument);
   ERROR_COPY(bad_argument, which_argument);
   if (expected_type)
@@ -1050,17 +1024,17 @@ PMOD_EXPORT DECLSPEC(noreturn) void bad_arg_error(
   ERROR_COPY_SVALUE(bad_argument, got_value);
   DWERROR("%s():Bad arg %d (expected %s)\n",
           func, which_argument, expected_type);
-  ERROR_DONE(generic);
+  ERROR_DONE();
 }
 
 /* coverity[+kill] */
 PMOD_EXPORT DECLSPEC(noreturn) void math_error(
-  const char *func,
-  struct svalue *base_sp,  int args,
+  const char *func, int args,
   struct svalue *number,
   const char *desc, ...) ATTRIBUTE((noreturn))
 {
   INIT_ERROR(math);
+  const struct svalue *base_sp = Pike_sp - args;
   if(number)
   {
     ERROR_COPY_SVALUE(math, number);
@@ -1068,35 +1042,31 @@ PMOD_EXPORT DECLSPEC(noreturn) void math_error(
     SET_SVAL(ERROR_STRUCT(math,o)->number, PIKE_T_INT, NUMBER_UNDEFINED,
 	     integer, 0);
   }
-  ERROR_DONE(generic);
+  ERROR_DONE();
 }
 
 /* coverity[+kill] */
-PMOD_EXPORT DECLSPEC(noreturn) void resource_error(
-  const char *func,
-  struct svalue *base_sp,  int args,
-  const char *resource_type,
+static DECLSPEC(noreturn) void resource_error(
+  const char *func, int args,
   size_t howmuch_,
   const char *desc, ...) ATTRIBUTE((noreturn))
 {
   INT_TYPE howmuch = (INT_TYPE)howmuch_;
+  const struct svalue *base_sp = NULL;
   INIT_ERROR(resource);
+  if(args>=0) base_sp = Pike_sp-args;
   ERROR_COPY(resource, howmuch);
-  ERROR_STRUCT(resource,o)->resource_type=make_shared_string(resource_type);
-  ERROR_DONE(generic);
+  ERROR_STRUCT(resource,o)->resource_type=make_shared_string("memory");
+  ERROR_DONE();
 }
 
-/* coverity[+kill] */
-PMOD_EXPORT DECLSPEC(noreturn) void permission_error(
-  const char *func,
-  struct svalue *base_sp, int args,
-  const char *permission_type,
-  const char *desc, ...) ATTRIBUTE((noreturn))
+PMOD_EXPORT DECLSPEC(noreturn) void out_of_memory_error (
+  const char *func, int args,
+  size_t amount)
 {
-  INIT_ERROR(permission);
-  ERROR_STRUCT(permission,o)->permission_type=
-    make_shared_string(permission_type);
-  ERROR_DONE(generic);
+  resource_error (func, args, amount,
+                  amount ? msg_out_of_mem_2 : msg_out_of_mem, amount);
+  UNREACHABLE();
 }
 
 /* coverity[+kill] */
@@ -1104,11 +1074,11 @@ PMOD_EXPORT void wrong_number_of_args_error(const char *name, int args, int expe
 {
   if(expected>args)
   {
-    bad_arg_error (name, Pike_sp-args, args, expected, NULL, NULL,
+    bad_arg_error (name, args, expected, NULL, NULL,
 		   "Too few arguments to %s(). Expected at least %d (got %d).\n",
 		   name, expected, args);
   }else {
-    bad_arg_error (name, Pike_sp-args, args, expected, NULL, NULL,
+    bad_arg_error (name, args, expected, NULL, NULL,
 		   "Too many arguments to %s(). Expected at most %d (got %d).\n",
 		   name, expected, args);
   }
@@ -1128,17 +1098,11 @@ void init_error(void)
 
 #ifdef PIKE_DEBUG
   dmalloc_accept_leak(add_gc_callback(gc_check_throw_value,0,0));
-
-/*   recovery_lookup = allocate_mapping(100); */
 #endif
 }
 
 void cleanup_error(void)
 {
-#ifdef PIKE_DEBUG
-/*   free_mapping(recovery_lookup); */
-#endif
 #define ERR_CLEANUP
 #include "errors.h"
 }
-#endif

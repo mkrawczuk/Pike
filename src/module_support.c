@@ -330,7 +330,7 @@ static int va_get_args_2(struct svalue *s,
 	*cast_arg(ptr, char **) = NULL;
 	break;
       }
-      /* FALL THROUGH */
+      /* FALLTHRU */
     case 'c':
     case 's':
       if(TYPEOF(*s) != T_STRING) goto type_err;
@@ -349,7 +349,7 @@ static int va_get_args_2(struct svalue *s,
 	*cast_arg(ptr, struct pike_string **) = NULL;
 	break;
       }
-      /* FALL THROUGH */
+      /* FALLTHRU */
     case 'n':
     case 'S':
       if(TYPEOF(*s) != T_STRING) goto type_err;
@@ -362,7 +362,7 @@ static int va_get_args_2(struct svalue *s,
 	*cast_arg(ptr, struct pike_string **) = NULL;
 	break;
       }
-      /* FALL THROUGH */
+      /* FALLTHRU */
     case 't':
     case 'W':
       if(TYPEOF(*s) != T_STRING) goto type_err;
@@ -374,7 +374,7 @@ static int va_get_args_2(struct svalue *s,
 	*cast_arg(ptr, struct array **) = NULL;
 	break;
       }
-      /* FALL THROUGH */
+      /* FALLTHRU */
     case 'a':
       if(TYPEOF(*s) != T_ARRAY) goto type_err;
       *cast_arg(ptr, struct array **)=s->u.array;
@@ -404,7 +404,7 @@ static int va_get_args_2(struct svalue *s,
 	*cast_arg(ptr, struct mapping **) = NULL;
 	break;
       }
-      /* FALL THROUGH */
+      /* FALLTHRU */
     case 'm':
       if(TYPEOF(*s) != T_MAPPING) goto type_err;
       *cast_arg(ptr, struct mapping **)=s->u.mapping;
@@ -415,7 +415,7 @@ static int va_get_args_2(struct svalue *s,
 	*cast_arg(ptr, struct multiset **) = NULL;
 	break;
       }
-      /* FALL THROUGH */
+      /* FALLTHRU */
     case 'u':
     case 'M':
       if(TYPEOF(*s) != T_MULTISET) goto type_err;
@@ -427,7 +427,7 @@ static int va_get_args_2(struct svalue *s,
 	*cast_arg(ptr, struct object **) = NULL;
 	break;
       }
-      /* FALL THROUGH */
+      /* FALLTHRU */
     case 'o':
       if(TYPEOF(*s) != T_OBJECT) goto type_err;
       if (SUBTYPEOF(*s)) {
@@ -523,17 +523,14 @@ PMOD_EXPORT void get_all_args(const char *fname, INT32 args,
     case ARGS_LONG:
       break;
     case ARGS_NUL_IN_STRING:
-      bad_arg_error(
-	fname, Pike_sp-args, args,
-	ret+1,
-	"string(1..255)",
+      bad_arg_error(fname, args, ret+1,	"string(1..255)",
 	Pike_sp+ret-args,
 	"Bad argument %d to %s(). NUL in string.\n",
         ret+1, fname);
       UNREACHABLE();
 
     case ARGS_SUBTYPED_OBJECT:
-      bad_arg_error(fname, Pike_sp-args, args, ret+1, "object",
+      bad_arg_error(fname, args, ret+1, "object",
 		    Pike_sp+ret-args,
 		    "Subtyped objects are not supported.\n");
       UNREACHABLE();
@@ -580,20 +577,14 @@ PMOD_EXPORT void get_all_args(const char *fname, INT32 args,
       }
 
       if (info != ARGS_SHORT) {
-	bad_arg_error(
-	  fname, Pike_sp-args, args,
-	  ret+1,
-	  expected_type,
+        bad_arg_error(fname, args, ret+1, expected_type,
 	  Pike_sp+ret-args,
 	  "Bad argument %d to %s(). Expected %s.\n",
 	  ret+1, fname, expected_type);
       } else {
 	const char *req_args_end = strchr (format, '.');
 	if (!req_args_end) req_args_end = strchr (format, 0);
-	bad_arg_error(
-	  fname, Pike_sp-args, args,
-	  ret+1,
-	  expected_type,
+        bad_arg_error(fname, args, ret+1, expected_type,
 	  0,
 	  "Too few arguments to %s(). Expected %"PRINTPTRDIFFT"d arguments, got %d.\n"
 	  "The type of the next argument is expected to be %s.\n",

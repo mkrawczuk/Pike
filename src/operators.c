@@ -31,9 +31,9 @@
 #include "pike_compiler.h"
 
 #define OP_DIVISION_BY_ZERO_ERROR(FUNC) \
-     math_error(FUNC, Pike_sp-2, 2, 0, "Division by zero.\n")
+     math_error(FUNC, 2, 0, "Division by zero.\n")
 #define OP_MODULO_BY_ZERO_ERROR(FUNC) \
-     math_error(FUNC, Pike_sp-2, 2, 0, "Modulo by zero.\n")
+     math_error(FUNC, 2, 0, "Modulo by zero.\n")
 
     /* This calculation should always give some margin based on the size. */
     /* It utilizes that log10(256) ~= 2.4 < 5/2. */
@@ -345,13 +345,13 @@ PMOD_EXPORT void o_cast_to_string(void)
 	    if ((unsigned INT32) val <= 0xff)
 	      break;
 	    shift = 1;
-	    /* FALL THROUGH */
+	    /* FALLTHRU */
 
 	  case 1:
 	    if ((unsigned INT32) val <= 0xffff)
 	      break;
 	    shift = 2;
-	    /* FALL THROUGH */
+	    /* FALLTHRU */
 
 	  case 2:
 #if SIZEOF_INT_TYPE > 4
@@ -1074,7 +1074,7 @@ void o_check_soft_cast(struct svalue *s, struct pike_type *type)
 
     free_type(sval_type);
 
-    bad_arg_error(NULL, Pike_sp-1, 1, 1, t1->str, Pike_sp-1,
+    bad_arg_error(NULL, -1, 1, t1->str, Pike_sp-1,
 		  "%s(): Soft cast failed.\n%S",
 		  fname, s.s);
 
@@ -2200,7 +2200,7 @@ PMOD_EXPORT void o_subtract(void)
 	  }
        }
 
-    bad_arg_error("`-", Pike_sp-2, 2, 2, get_name_of_type(TYPEOF(Pike_sp[-2])),
+    bad_arg_error("`-", 2, 2, get_name_of_type(TYPEOF(Pike_sp[-2])),
 		  Pike_sp-1, "Subtract on different types.\n");
   }
 
@@ -4454,7 +4454,7 @@ PMOD_EXPORT void o_compl(void)
     ptrdiff_t len, i;
 
     if(Pike_sp[-1].u.string->size_shift) {
-      bad_arg_error("`~", Pike_sp-1, 1, 1, "string(0)", Pike_sp-1,
+      bad_arg_error("`~", 1, 1, "string(0)", Pike_sp-1,
 		    "Expected 8-bit string.\n");
     }
 
@@ -4735,7 +4735,7 @@ PMOD_EXPORT void o_range2 (int bound_types)
       int f;
       if (!o->prog)
 	bad_arg_error (range_func_name (bound_types),
-		       ind, Pike_sp - ind, 1, "object", ind,
+                       Pike_sp - ind, 1, "object", ind,
 		       "Cannot call `[..] in destructed object.\n");
 
       if ((f = FIND_LFUN(o->prog->inherits[SUBTYPEOF(*ind)].prog,
@@ -4776,18 +4776,18 @@ PMOD_EXPORT void o_range2 (int bound_types)
 	switch (call_old_range_lfun (bound_types, o, low, high)) {
 	  case 1:
 	    bad_arg_error (range_func_name (bound_types),
-			   ind, Pike_sp - ind, 1, "object", ind,
+                           Pike_sp - ind, 1, "object", ind,
 			   "Object got neither `[..] nor `[].\n");
 	    break;
 	  case 2:
 	    bad_arg_error (range_func_name (bound_types),
-			   ind, Pike_sp - ind, 1, "object", ind,
+                           Pike_sp - ind, 1, "object", ind,
 			   "Object got no `[..] and there is no _sizeof to "
 			   "translate the from-the-end index to use `[].\n");
 	    break;
 	  case 3:
 	    bad_arg_error (range_func_name (bound_types),
-			   ind, 3, 1, "object", ind,
+                           3, 1, "object", ind,
 			   "Cannot call `[..] in destructed object.\n");
 	    break;
 	  default:
@@ -4807,7 +4807,7 @@ PMOD_EXPORT void o_range2 (int bound_types)
       if (!(bound_types & RANGE_LOW_OPEN)) {
 	if (TYPEOF(*low) != T_INT)
 	  bad_arg_error (range_func_name (bound_types),
-			 ind, Pike_sp - ind, 2, "int", low,
+                         Pike_sp - ind, 2, "int", low,
 			 "Bad lower bound. Expected int, got %s.\n",
 			 get_name_of_type (TYPEOF(*low)));
 	l = low->u.integer;
@@ -4815,7 +4815,7 @@ PMOD_EXPORT void o_range2 (int bound_types)
       if (!(bound_types & RANGE_HIGH_OPEN)) {
 	if (TYPEOF(*high) != T_INT)
 	  bad_arg_error (range_func_name (bound_types),
-			 ind, Pike_sp - ind, high - ind + 1, "int", high,
+                         Pike_sp - ind, high - ind + 1, "int", high,
 			 "Bad upper bound. Expected int, got %s.\n",
 			 get_name_of_type (TYPEOF(*high)));
 	h = high->u.integer;
@@ -4830,7 +4830,7 @@ PMOD_EXPORT void o_range2 (int bound_types)
 
     default:
       bad_arg_error (range_func_name (bound_types),
-		     ind, Pike_sp - ind, 1, "string|array|object", ind,
+                     Pike_sp - ind, 1, "string|array|object", ind,
 		     "Cannot use [..] on a %s. Expected string, array or object.\n",
 		     get_name_of_type (TYPEOF(*ind)));
   }

@@ -129,11 +129,6 @@ struct node_s;
 typedef struct node_s node;
 #endif
 
-#ifndef STRUCT_OBJECT_DECLARED
-#define STRUCT_OBJECT_DECLARED
-struct object;
-#endif
-
 #undef EXTERN
 #undef STRUCT
 #undef PUSH
@@ -1032,6 +1027,12 @@ PMOD_EXPORT void string_builder_append_disassembly(struct string_builder *s,
 						   const char *opcode,
 						   const char **params,
 						   const char *comment);
+enum Pike_opcodes;
+PMOD_EXPORT void string_builder_append_pike_opcode(struct string_builder *s,
+						   const PIKE_OPCODE_T *addr,
+						   enum Pike_opcodes op,
+						   int arg1,
+						   int arg2);
 PMOD_EXPORT void add_reverse_symbol(struct pike_string *sym, void *addr);
 PMOD_EXPORT void simple_add_reverse_symbol(const char *sym, void *addr);
 PMOD_EXPORT void init_reverse_symbol_table();
@@ -1138,12 +1139,32 @@ static inline int PIKE_UNUSED_ATTRIBUTE FIND_LFUN(struct program * p, enum LFUN 
     (Pike_compiler->compat_major == (MAJOR) && \
      Pike_compiler->compat_minor <= (MINOR)))
 
-#endif /* PROGRAM_H */
 
-/* Kludge... */
-#ifndef LAS_H
-/* FIXME: Needed for the OPT_??? macros.
- * Maybe they should be moved here, since las.h includes this file anyway?
- */
-#include "las.h"
-#endif /* !LAS_H */
+#define OPT_OPTIMIZED       0x1    /* has been processed by optimize(),
+				    * only used in node_info
+				    */
+#define OPT_NOT_CONST       0x2    /* isn't constant */
+#define OPT_SIDE_EFFECT     0x4    /* has side effects */
+#define OPT_ASSIGNMENT      0x8    /* does assignments */
+#define OPT_TRY_OPTIMIZE    0x10   /* might be worth optimizing */
+#define OPT_EXTERNAL_DEPEND 0x20   /* the value depends on external
+				    * influences (such as read_file or so)
+				    */
+#define OPT_CASE            0x40   /* contains case(s) */
+#define OPT_CONTINUE        0x80   /* contains continue(s) */
+#define OPT_BREAK           0x100  /* contains break(s) */
+#define OPT_RETURN          0x200  /* contains return(s) */
+#define OPT_TYPE_NOT_FIXED  0x400  /* type-field might be wrong */
+#define OPT_WEAK_TYPE	    0x800  /* don't warn even if strict types */
+#define OPT_APPLY           0x1000 /* contains apply */
+#define OPT_FLAG_NODE	    0x2000 /* don't optimize away unless the
+				    * parent also is optimized away */
+#define OPT_SAFE            0x4000 /* Known to not throw error (which normally
+				    * isn't counted as side effect). Only used
+				    * in tree_info. */
+
+/* This is a statement which got custom break/continue label handling.
+ * Set in compiler_frame. Beware: This is not a node flag! -Hubbe */
+#define OPT_CUSTOM_LABELS   0x10000
+
+#endif /* PROGRAM_H */

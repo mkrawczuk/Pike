@@ -38,8 +38,6 @@ extern struct program *image_program;
 #define THIS ((struct image *)(Pike_fp->current_storage))
 #define THISOBJ (Pike_fp->current_object)
 
-#define testrange(x) MAXIMUM(MINIMUM((x),255),0)
-
 /**************** noise ************************/
 
 #define NOISE_PTS 1024
@@ -267,7 +265,7 @@ static void init_colorrange(rgb_group *cr,struct svalue *s,char *where)
 	 *vp = s->u.array->item[i].u.float_number;
       else
 	 bad_arg_error(where,
-		       0,0, 1, "array of int|float,color", 0,
+                       0, 1, "array of int|float,color", 0,
 		       "%s: expected int or float at element %d"
 		       " of colorrange\n",where,i);
 
@@ -277,7 +275,7 @@ static void init_colorrange(rgb_group *cr,struct svalue *s,char *where)
 
       if (!image_color_svalue(s->u.array->item+i+1,&rgbt))
 	 bad_arg_error(where,
-		       0,0, 1, "array of int|float,color", 0,
+                       0, 1, "array of int|float,color", 0,
 		       "%s: no color at element %d"
 		       " of colorrange\n",where,i+1);
 
