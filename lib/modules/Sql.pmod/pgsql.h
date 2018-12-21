@@ -10,6 +10,12 @@
 //#define PG_DEBUGRACE	1
 
 //#define PG_STATS	1	    // Collect extra usage statistics
+#define PG_DEBUGHISTORY	     0	    // If >0, it is the number of records
+				    // we keep history on the connection
+				    // with the database
+#define PG_DEADLOCK_SENTINEL 0	    // If >0, defines the number seconds
+				    // a lock can be held before the deadlock
+				    // report is being dumped to stderr
 
 #define FETCHLIMIT	     1024   // Initial upper limit on the
 				    // number of rows to fetch across the
@@ -24,6 +30,7 @@
 #define QUERYTIMEOUT	     4095   // Queries running longer than this number
 				    // of seconds are canceled automatically
 #define PORTALBUFFERSIZE     (32*1024) // Approximate buffer per portal
+#define MINPINGINTERVAL	     4	    // minimum seconds between ping()s
 #define BACKOFFDELAY	     1
 
 #define PGSQL_DEFAULT_PORT   5432

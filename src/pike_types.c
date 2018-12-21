@@ -28,6 +28,7 @@
 #include "pike_compiler.h"
 #include "block_allocator.h"
 #include "bitvector.h"
+#include "gc_header.h"
 
 #ifdef PIKE_DEBUG
 #define PIKE_TYPE_DEBUG
@@ -64,6 +65,7 @@ PMOD_EXPORT struct pike_type *enumerable_type_string;
 PMOD_EXPORT struct pike_type *any_type_string;
 PMOD_EXPORT struct pike_type *weak_type_string;	/* array|mapping|multiset|function */
 struct pike_type *sscanf_type_string;
+PMOD_EXPORT struct pike_type *utf8_type_string;
 
 PMOD_EXPORT struct pike_string *literal_string_string;
 PMOD_EXPORT struct pike_string *literal_int_string;
@@ -259,7 +261,9 @@ PMOD_EXPORT void really_free_pike_type(struct pike_type * t) {
 
 ATTRIBUTE((malloc))
 PMOD_EXPORT struct pike_type * alloc_pike_type(void) {
-    return ba_alloc(&type_allocator);
+    struct pike_type *t = ba_alloc(&type_allocator);
+    gc_init_marker(t);
+    return t;
 }
 
 PMOD_EXPORT void count_memory_in_pike_types(size_t *n, size_t *s) {
@@ -555,6 +559,7 @@ static inline struct pike_type *debug_mk_type(unsigned INT32 type,
   debug_malloc_pass(t = ba_alloc(&type_allocator));
 
   t->refs = 0;
+  gc_init_marker(t);
   add_ref(t);	/* For DMALLOC... */
   t->type = type;
   t->flags = 0;
@@ -2387,6 +2392,8 @@ void low_describe_type(struct string_builder *s, struct pike_type *t)
 	MAKE_CONST_STRING(deprecated, "deprecated");
 	if (((struct pike_string *)t->car) == deprecated) {
 	  string_builder_sprintf(s, "__deprecated__(%T)", t->cdr);
+	} else if (t == utf8_type_string) {
+	  string_builder_sprintf(s, "utf8_string");
 	} else {
 	  struct svalue sval;
 	  SET_SVAL(sval, PIKE_T_STRING, 0, string,
@@ -8726,6 +8733,7 @@ void init_types(void)
 				    tFuncV(tNone,tZero,tOr(tMix,tVoid))));
   sscanf_type_string = CONSTTYPE(tFuncV(tStr tAttr("sscanf_format", tStr),
 					tAttr("sscanf_args", tMix), tIntPos));
+  utf8_type_string = CONSTTYPE(tUtf8Str);
 
   /* add_ref(weak_type_string);	*//* LEAK */
 
@@ -8811,6 +8819,8 @@ void cleanup_pike_types(void)
   weak_type_string = NULL;
   free_type(sscanf_type_string);
   sscanf_type_string = NULL;
+  free_type(utf8_type_string);
+  utf8_type_string = NULL;
 
   free_string(literal_string_string); literal_string_string = NULL;
   free_string(literal_int_string); literal_int_string = NULL;
@@ -9096,9 +9106,16 @@ void gc_check_type (struct pike_type *t)
       case T_OR:
       case T_AND:
       case PIKE_T_RING:
+	debug_gc_check (t->car, " as car in a type");
+	debug_gc_check (t->cdr, " as cdr in a type");
+	break;
       case PIKE_T_ATTRIBUTE:
       case PIKE_T_NAME:
+#ifdef PIKE_DEBUG
+        /* this is a string and without PIKE_DEBUG
+         * they are not touched by the GC */
 	debug_gc_check (t->car, " as car in a type");
+#endif
 	debug_gc_check (t->cdr, " as cdr in a type");
 	break;
       case T_ARRAY:
@@ -9151,7 +9168,7 @@ void gc_check_all_types (void)
     for(t = pike_type_hash[e]; t; t=t->next) {
       if (gc_keep_markers) {
 	/* Make sure that leaked types also have markers at cleanup... */
-	(void)pmod_get_marker(t);
+	(void)get_marker(t);
       }
       gc_check_type(t);
     }

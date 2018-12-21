@@ -228,6 +228,7 @@ static int low_count_args(node *n)
   {
   case F_COMMA_EXPR:
   case F_VAL_LVAL:
+  case F_FOREACH_VAL_LVAL:
   case F_ARG_LIST:
     a=count_args(CAR(n));
     if(a==-1) return -1;
@@ -312,6 +313,7 @@ INT32 count_args(node *n)
     int val;
     while ((n->token == F_COMMA_EXPR) ||
 	   (n->token == F_VAL_LVAL) ||
+	   (n->token == F_FOREACH_VAL_LVAL) ||
 	   (n->token == F_ARG_LIST)) {
       if (CAR(n)) {
 	CAR(n)->parent = n;
@@ -444,10 +446,10 @@ static int check_node_type(node *n, struct pike_type *t, const char *msg)
   }
   if (runtime_options & RUNTIME_CHECK_TYPES) {
     node *p = n->parent;
-    if (CAR(p) == n) {
+    if (p && (CAR(p) == n)) {
       (_CAR(p) = mksoftcastnode(t, mkcastnode(mixed_type_string, n)))
 	->parent = p;
-    } else if (CDR(p) == n) {
+    } else if (p && (CDR(p) == n)) {
       (_CDR(p) = mksoftcastnode(t, mkcastnode(mixed_type_string, n)))
 	->parent = p;
     } else {
@@ -1144,6 +1146,9 @@ node *debug_mklocalnode(int var, int depth)
 
   res->node_info = OPT_NOT_CONST;
   res->tree_info = res->node_info;
+  if (res->type && (res->type->type == PIKE_T_AUTO)) {
+    res->node_info |= OPT_TYPE_NOT_FIXED;
+  }
 #ifdef __CHECKER__
   _CDR(res) = 0;
 #endif
@@ -2389,6 +2394,7 @@ static void low_print_tree(node *foo,int needlval)
   }
 
   case F_VAL_LVAL:
+  case F_FOREACH_VAL_LVAL:
     low_print_tree(_CAR(foo),0);
     fputs(",&", stderr);
     low_print_tree(_CDR(foo),0);
@@ -2871,6 +2877,7 @@ static void find_written_vars(node *n,
     break;
 
   case F_VAL_LVAL:
+  case F_FOREACH_VAL_LVAL:
     find_written_vars(CAR(n), p, 0);
     find_written_vars(CDR(n), p, 1);
     break;
@@ -3090,11 +3097,45 @@ static int depend2_p(node *n, node *lval)
 
 static int function_type_max=0;
 
-void check_foreach_type(node *expression, node *lvalues,
-                         struct pike_type **ind_type,
-                         struct pike_type **val_type )
+static void fix_auto_node(node *n, struct pike_type *type)
+{
+  free_type(n->type);
+  copy_pike_type(n->type, type);
+  switch(n->token) {
+  case F_LOCAL:
+    if (!n->u.integer.b) {
+      struct local_variable *var =
+	&Pike_compiler->compiler_frame->variable[n->u.integer.a];
+      if (var->type) free_type(var->type);
+      copy_pike_type(var->type, type);
+    }
+    break;
+  case F_EXTERNAL:
+    if (n->u.integer.a == Pike_compiler->new_program->id) {
+      struct identifier *id =
+	ID_FROM_INT(Pike_compiler->new_program, n->u.integer.b);
+      if( id )
+      {
+	if (id->type) free_type(id->type);
+	copy_pike_type(id->type, type);
+      }
+    }
+    break;
+  default:
+    break;
+  }
+}
+
+void fix_foreach_type(node *val_lval)
 {
   struct compilation *c = THIS_COMPILATION;
+  node *expression, *lvalues;
+
+  if (!val_lval || (val_lval->token != F_FOREACH_VAL_LVAL)) return;
+
+  fix_type_field(val_lval);
+  expression = CAR(val_lval);
+  lvalues = CDR(val_lval);
 
   if (!expression || pike_types_le(expression->type, void_type_string)) {
     yyerror("foreach(): Looping over a void expression.");
@@ -3146,7 +3187,7 @@ void check_foreach_type(node *expression, node *lvalues,
         } else {
           if( CAR(lvalues)->type->type == PIKE_T_AUTO )
           {
-            if(ind_type)copy_pike_type(*ind_type,index_type);
+	    fix_auto_node(CAR(lvalues), index_type);
           }
           else if (!pike_types_le(index_type, CAR(lvalues)->type)) {
             int level = REPORT_NOTICE;
@@ -3186,7 +3227,7 @@ void check_foreach_type(node *expression, node *lvalues,
         } else {
           if( CDR(lvalues)->type->type == PIKE_T_AUTO )
           {
-            if(val_type) copy_pike_type(*val_type,value_type);
+	    fix_auto_node(CDR(lvalues), value_type);
           }
           else if (!pike_types_le(value_type, CDR(lvalues)->type)) {
             int level = REPORT_NOTICE;
@@ -3229,10 +3270,13 @@ void check_foreach_type(node *expression, node *lvalues,
 	  /* No loop variable. Will be converted to a counted loop
 	   * by treeopt. */
         } else if( lvalues->type->type == PIKE_T_AUTO ) {
-          if(val_type)
-            copy_pike_type( *val_type, expression->type->car );
+	  fix_auto_node(lvalues, expression->type->car);
 	} else if (pike_types_le(lvalues->type, void_type_string)) {
-	  yyerror("Bad argument 2 to foreach().");
+	  yytype_report(REPORT_ERROR,
+			NULL, 0, lvalues->type,
+			NULL, 0, expression->type->car,
+			0,
+			"Bad argument 2 to foreach().");
 	} else {
 	  struct pike_type *array_value_type;
 
@@ -3415,8 +3459,8 @@ void fix_type_field(node *n)
     These two are needed if we want to extract types
     from nodes while building the tree.
   */
-  if( CAR(n) ) fix_type_field(CAR(n));
-  if( CDR(n) ) fix_type_field(CDR(n));
+  if( car_is_node(n) ) fix_type_field(CAR(n));
+  if( cdr_is_node(n) ) fix_type_field(CDR(n));
 
   switch(n->token)
   {
@@ -3490,9 +3534,6 @@ void fix_type_field(node *n)
       copy_pike_type(n->type, CAR(n)->type);
     } else {
       struct pike_type *tmp;
-      /* Ensure that the type-fields are up to date. */
-      fix_type_field(CAR(n));
-      fix_type_field(CDR(n));
       type_stack_mark();
       push_finished_type(CDR(n)->type);
       push_type(T_ARRAY);
@@ -3509,10 +3550,7 @@ void fix_type_field(node *n)
     } else if (!CAR(n)) {
       copy_pike_type(n->type, CDR(n)->type);
     } else {
-      /* Ensure that the type-fields are up to date. */
       struct pike_type *t;
-      fix_type_field(CDR(n));
-      fix_type_field(CAR(n));
       if( CDR(n)->type->type == PIKE_T_AUTO )
       {
           /* Update to actual type (assign from soft-cast to auto). */
@@ -3954,13 +3992,13 @@ void fix_type_field(node *n)
     break;
 
   case F_FOREACH:
-    if (!CAR(n) || (CAR(n)->token != F_VAL_LVAL)) {
+    if (!CAR(n) || (CAR(n)->token != F_FOREACH_VAL_LVAL)) {
       yyerror("foreach(): No expression to loop over.");
     } else {
       if (!CAAR(n) || pike_types_le(CAAR(n)->type, void_type_string)) {
 	yyerror("foreach(): Looping over a void expression.");
       } else {
-        check_foreach_type( CAAR(n), CDAR(n), NULL, NULL);
+        fix_foreach_type(CAR(n));
       }
     }
     copy_pike_type(n->type, void_type_string);
@@ -4009,6 +4047,17 @@ void fix_type_field(node *n)
     }
     break;
 
+  case F_TYPEOF:
+    if (CAR(n)) {
+      push_finished_type(CAR(n)->type);
+    } else {
+      push_finished_type(mixed_type_string);
+    }
+    push_type(T_TYPE);
+    if (n->type) free_type(n->type);
+    n->type = pop_type();
+    break;
+
   case F_UNDEFINED:
     copy_pike_type(n->type, zero_type_string);
     break;
@@ -4043,6 +4092,21 @@ void fix_type_field(node *n)
       copy_pike_type(n->type, CDR(n)->type);
     }
     break;
+
+  case F_LOCAL:
+    {
+      struct compiler_frame *f = Pike_compiler->compiler_frame;
+      int e;
+      for (e = 0; f && (e < n->u.integer.b); e++) {
+	f = f->previous;
+      }
+      if (f) {
+	copy_pike_type(n->type, f->variable[n->u.integer.a].type);
+      } else {
+	copy_pike_type(n->type, mixed_type_string);
+      }
+      break;
+    }
 
   case F_MAGIC_INDEX:
     /* FIXME: Could have a stricter type for ::`->(). */
@@ -4171,7 +4235,8 @@ static void optimize(node *n)
 				OPT_RETURN|
 				OPT_FLAG_NODE)) &&
 	 (CAR(n)->tree_info & OPT_TRY_OPTIMIZE) &&
-	 CAR(n)->token != F_VAL_LVAL)
+	 CAR(n)->token != F_VAL_LVAL &&
+	 CAR(n)->token != F_FOREACH_VAL_LVAL)
       {
 	_CAR(n) = eval(CAR(n));
 	if(CAR(n)) CAR(n)->parent = n;

@@ -26,7 +26,6 @@
 #include "builtin_functions.h"
 #include "mapping.h"
 #include "cyclic.h"
-#include "pike_types.h"
 #include "opcodes.h"
 #include "version.h"
 #include "block_allocator.h"
@@ -2024,13 +2023,7 @@ int low_resolve_identifier(struct pike_string *ident)
   CHECK_COMPILER();
 
   ref_push_string(ident);
-  ref_push_string(c->lex.current_file);
-  if (c->handler) {
-    ref_push_object(c->handler);
-  } else {
-    push_int(0);
-  }
-  if (!safe_apply_current2(PC_RESOLV_FUN_NUM, 3, NULL))
+  if (!safe_apply_current2(PC_RESOLV_FUN_NUM, 1, NULL))
     handle_compile_exception ("Error resolving '%S'.", ident);
 
   if (Pike_compiler->compiler_pass != COMPILER_PASS_LAST) {
@@ -3118,6 +3111,7 @@ struct program *low_allocate_program(void)
 {
   struct program *p=alloc_program();
   memset(p, 0, sizeof(struct program));
+  gc_init_marker(p);
   p->flags|=PROGRAM_VIRGIN;
   p->alignment_needed=1;
 
@@ -5127,10 +5121,10 @@ void lower_inherit(struct program *p,
     return;
   }
 
-  /* Propagate the HAS_C_METHODS and CLEAR_STORAGE flags. */
-  if (p->flags & (PROGRAM_HAS_C_METHODS|PROGRAM_CLEAR_STORAGE)) {
+  /* Propagate the HAS_C_METHODS, CLEAR_STORAGE and DESTRUCT_IMMEDIATE flags. */
+  if (p->flags & (PROGRAM_HAS_C_METHODS|PROGRAM_CLEAR_STORAGE|PROGRAM_DESTRUCT_IMMEDIATE)) {
     Pike_compiler->new_program->flags |=
-      (p->flags & (PROGRAM_HAS_C_METHODS|PROGRAM_CLEAR_STORAGE));
+      (p->flags & (PROGRAM_HAS_C_METHODS|PROGRAM_CLEAR_STORAGE|PROGRAM_DESTRUCT_IMMEDIATE));
   }
 
  /* parent offset was increased by 42 for above test.. */
@@ -5546,6 +5540,15 @@ void compiler_do_inherit(node *n,
   }
 }
 
+void compiler_do_implement(node *n)
+{
+  if (!n) {
+    yyerror("Invalid implement directive.");
+    return;
+  }
+  /* FIXME: Implement. */
+}
+
 int call_handle_inherit(struct pike_string *s)
 {
   struct compilation *c = THIS_COMPILATION;
@@ -5750,6 +5753,7 @@ int low_define_variable(struct pike_string *name,
 			INT32 run_time_type)
 {
   struct compilation *c = THIS_COMPILATION;
+  unsigned int identifier_flags = IDENTIFIER_VARIABLE;
   union idptr func;
 
 #ifdef PIKE_DEBUG
@@ -5764,11 +5768,16 @@ int low_define_variable(struct pike_string *name,
   func.offset = offset - Pike_compiler->new_program->inherits[0].storage_offset;
   if (run_time_type == PIKE_T_FREE) func.offset = -1;
 
+  if (run_time_type & PIKE_T_NO_REF_FLAG) {
+    run_time_type &= ~PIKE_T_NO_REF_FLAG;
+    identifier_flags |= IDENTIFIER_NO_THIS_REF;
+  }
+
   if (flags & ID_PRIVATE) flags |= ID_LOCAL|ID_PROTECTED;
 
   return
     add_identifier(c, type, name,
-		   flags, IDENTIFIER_VARIABLE, 0,
+		   flags, identifier_flags, 0,
 		   func,
 		   run_time_type);
 }
@@ -9752,8 +9761,8 @@ PMOD_EXPORT void string_builder_append_pike_opcode(struct string_builder *s,
   if (instr->flags & I_HASARG2) {
     params[1] = buf[1];
   }
-  sprintf(buf[3], "# %s", instr->name);
-  string_builder_append_disassembly(s, addr, addr, buf[3], params, NULL);
+  sprintf(buf[2], "# %s", instr->name);
+  string_builder_append_disassembly(s, addr, addr, buf[2], params, NULL);
 }
 
 PMOD_EXPORT void add_reverse_symbol(struct pike_string *sym, void *addr)

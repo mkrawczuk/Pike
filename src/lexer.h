@@ -397,7 +397,8 @@ static struct pike_string *readstring(struct lex *lex)
     char *buf;
     size_t len;
 
-    READBUF(((C > '\\') || ((C != '"') && (C != '\\') && (C != '\n'))));
+    READBUF(((C > '\\') ||
+	     ((C != '"') && (C != '\\') && (C != '\n') && (C != '\r'))));
     if (len) {
 #if (SHIFT == 0)
       string_builder_binary_strcat(&tmp, buf, len);
@@ -413,7 +414,7 @@ static struct pike_string *readstring(struct lex *lex)
       yyerror("End of file in string.");
       break;
 
-    case '\n':
+    case '\n': case '\r':
       lex->current_line++;
       yyerror("Newline in string.");
       break;
@@ -557,6 +558,7 @@ static int low_yylex(struct lex *lex, YYSTYPE *yylval)
 	  break;
 	case TWO_CHAR('i','m'):
 	  if(ISWORD("import")) return TOK_IMPORT;
+	  if(ISWORD("implement")) return TOK_IMPLEMENT;
 	  break;
 	case TWO_CHAR('i','n'):
 	  if(ISWORD("int")) return TOK_INT_ID;
@@ -618,6 +620,9 @@ static int low_yylex(struct lex *lex, YYSTYPE *yylval)
 	  break;
 	case TWO_CHAR('w','h'):
 	  if(ISWORD("while")) return TOK_WHILE;
+	  break;
+	case TWO_CHAR('_','S'):
+	  if(ISWORD("_Static_assert")) return TOK_STATIC_ASSERT;
 	  break;
 	case TWO_CHAR('_','_'):
 	  if(len < 5) break;
@@ -731,7 +736,7 @@ static int low_yylex(struct lex *lex, YYSTYPE *yylval)
 
     case '#':
       SKIPSPACE();
-      READBUF(C!='\n' && C!=' ' && C!='\t');
+      READBUF(!wide_isspace(C));
 
       switch(len>0?INDEX_CHARP(buf, 0, SHIFT):0)
       {
@@ -742,7 +747,7 @@ static int low_yylex(struct lex *lex, YYSTYPE *yylval)
 
 	  if (LOOK() < '0' || LOOK() > '9') goto unknown_directive;
 
-	  READBUF(C!='\n' && C!=' ' && C!='\t');
+	  READBUF(!wide_isspace(C));
 	} else goto unknown_directive;
 	/* FALLTHRU */
       case '0': case '1': case '2': case '3': case '4':
@@ -771,7 +776,7 @@ static int low_yylex(struct lex *lex, YYSTYPE *yylval)
 	if(ISWORD("pragma"))
 	{
 	  SKIPSPACE();
-	  READBUF(C!='\n'&&C!=' ');
+	  READBUF(!wide_isspace(C));
 	  if (ISWORD("all_inline"))
 	  {
 	    lex->pragmas |= ID_INLINE;
@@ -873,6 +878,7 @@ unknown_directive:
 
     case ' ':
     case '\t':
+    case '\r':
       continue;
 
     case '\'':

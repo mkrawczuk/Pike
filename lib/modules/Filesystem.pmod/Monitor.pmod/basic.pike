@@ -324,6 +324,24 @@ protected class Monitor(string path,
     register_path(1);
   }
 
+  //! Returns the parent monitor, or UNDEFINED if no such monitor exists.
+  this_program parent()
+  {
+    string parent_path = canonic_path (dirname (path));
+    return monitors[parent_path];
+  }
+
+  //! To be called when a (direct) submonitor is released.
+  void submonitor_released (this_program submon)
+  {
+    if (files) {
+      string filename = basename (submon->path);
+      MON_WERR("%O->submonitor_released(%O): Removing list state for %O.\n",
+	       this, submon, filename);
+      files -= ({ filename });
+    }
+  }
+
   //! Call a notification callback.
   //!
   //! @param cb
@@ -521,7 +539,7 @@ protected class Monitor(string path,
       next_poll -= (next_poll - now) / 2;
     adjust_monitor(this);
 
-    if ((flags & MF_RECURSE) && st->isdir && files) {
+    if ((flags & MF_RECURSE) && st && st->isdir && files) {
       // Bump the files in the directory as well.
       foreach(files, string file) {
 	file = canonic_path(Stdio.append_path(path, file));
@@ -545,7 +563,7 @@ protected class Monitor(string path,
     int delta = max_dir_check_interval || global::max_dir_check_interval;
     this::st = st;
 
-    if (!st || !st->isdir) {
+    if (st && !st->isdir) {
       delta *= file_interval_factor || global::file_interval_factor;
     }
 
@@ -585,8 +603,15 @@ protected class Monitor(string path,
   void check_for_release(int mask, int flags)
   {
     if ((this::flags & mask) == flags) {
+      MON_WERR("Releasing in %O->check_for_release(%O, %O)\n",
+	       this, mask, flags);
       m_delete(monitors, path);
       release_monitor(this);
+      if (this_program par = parent()) {
+	par->submonitor_released (this);
+      } else {
+	MON_WERR("%O has no parent monitor.\n", this);
+      }
     }
   }
 
@@ -1058,27 +1083,23 @@ protected void inotify_event(int wd, int event, int cookie, string(8bit) path)
       string full_path = canonic_path(Stdio.append_path(m->path, path));
       // We're interested in the sub monitor, if it exists.
       if (Monitor submon = monitors[full_path]) {
+	MON_WERR ("inotify_event: Got submonitor %O.\n", submon);
+
 	m = submon;
-      } else if ((m->flags & MF_RECURSE) && !(event & System.Inotify.IN_DELETE)) {
-	// We've missed creation of the submonitor.
-	//
-	// This can happen in the
-	//
-	//   Exist ==> Deleted ==> Exists
-	//
-	// with no update of the directory inbetween race-condition.
-	//
-	// Create the submonitor.
-	MON_WARN("Monitor lost for path %O.\n", full_path);
-        m = monitor(full_path, m->flags | MF_AUTO | MF_HARD,
-            m->max_dir_check_interval,
-            m->file_interval_factor,
-            m->stable_time);
-        // monitor() will not register monitor for path if filter_file()
-        // returns 0.
-        if (m) {
-          m->check(0);    // Init monitor.
-        }
+      } else {
+	MON_WERR ("inotify_event: Forcing check of %O.\n", m);
+	// No monitor exists for the path yet (typically happens for
+	// IN_CREATE events). Force a check on the directory monitor.
+	m->check(m->flags);
+
+	// Try again after directory check.
+	if (Monitor submon2 = monitors[full_path]) {
+	  MON_WERR ("inotify_event: Got submonitor %O on retry.\n", submon2);
+	  m = submon2;
+	} else {
+	  MON_WERR ("inotify_event: Failed to get monitor for file %s "
+		    "in %O.\n", path, m);
+	}
       }
     }
   }
@@ -1803,7 +1824,7 @@ void set_nonblocking(int|void suggested_t)
   reschedule_backend_check(suggested_t);
 }
 
-//! Set the @[default_max_dir_check_interval].
+//! Set the @[max_dir_check_interval].
 void set_max_dir_check_interval(int max_dir_check_interval)
 {
   if (max_dir_check_interval > 0) {
@@ -1813,12 +1834,22 @@ void set_max_dir_check_interval(int max_dir_check_interval)
   }
 }
 
-//! Set the @[default_file_interval_factor].
+//! Set the @[file_interval_factor].
 void set_file_interval_factor(int file_interval_factor)
 {
   if (file_interval_factor > 0) {
     this::file_interval_factor = file_interval_factor;
   } else {
     this::file_interval_factor = default_file_interval_factor;
+  }
+}
+
+//! Set the @[stable_time].
+void set_stable_time (int stable_time)
+{
+  if (stable_time > 0) {
+    this::stable_time = stable_time;
+  } else {
+    this::stable_time = default_stable_time;
   }
 }

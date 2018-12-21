@@ -334,6 +334,7 @@ struct svalue
 #define tSprintfFormat(X)	tAttr("sprintf_format", X)
 #define tSprintfArgs(X)		tAttr("sprintf_args", X)
 #define tDeprecated(X)		tAttr("deprecated", X)
+#define tUtf8Str		tAttr("utf8", tStr8)
 
 #define tSimpleCallable tOr3(tArray,tFunction,tObj)
 #define tCallable tOr3(tArr(tSimpleCallable),tFunction,tObj)
@@ -761,6 +762,9 @@ PMOD_EXPORT TYPE_FIELD assign_svalues(struct svalue *to,
 				      const struct svalue *from,
 				      size_t num,
 				      TYPE_FIELD type_hint);
+PMOD_EXPORT void assign_no_ref_svalue(struct svalue *to,
+				      const struct svalue *val,
+				      const struct object *owner);
 PMOD_EXPORT void assign_to_short_svalue(union anything *u,
 			    TYPE_T type,
 			    const struct svalue *s);
@@ -895,7 +899,7 @@ static inline TYPE_FIELD PIKE_UNUSED_ATTRIBUTE dmalloc_gc_cycle_check_svalues (s
 
 #endif /* !NO_PIKE_SHORTHAND */
 
-#define PIKE_CONSTANT_MEMOBJ_INIT(refs, type) refs
+#define PIKE_CONSTANT_MEMOBJ_INIT(refs, type) GC_HEADER_INIT(refs)
 
 #define INIT_PIKE_MEMOBJ(X, TYPE) do {                  \
   struct ref_dummy *v_=(struct ref_dummy *)(X);         \

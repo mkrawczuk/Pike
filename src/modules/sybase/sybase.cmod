@@ -32,7 +32,6 @@
 #ifdef HAVE_SYBASE
 
 #include "pike_error.h"
-#include "program.h"
 #include "las.h"
 #include "threads.h"
 #include "module_support.h"
@@ -627,7 +626,7 @@ PIKEFUN object|string big_query(string query_)
   int toreturn=PS_NORESULT; /* one of the #defines here above */
 
   /* check, get and pop args */
-  check_all_args("sybase->big_query",args,BIT_STRING,0);
+  check_all_args(NULL,args,BIT_STRING,0);
   query=sp[-args].u.string->str;
   querylen=sp[-args].u.string->len;
   sybdebug("query: '%s'\n",query);
@@ -1219,9 +1218,6 @@ PIKE_MODULE_INIT {
 
 
 #else /* HAVE_SYBASE */
-/* This must be included last! */
-#include "module.h"
-
 PIKE_MODULE_INIT {}
 PIKE_MODULE_EXIT {}
 #endif /* HAVE_SYBASE */

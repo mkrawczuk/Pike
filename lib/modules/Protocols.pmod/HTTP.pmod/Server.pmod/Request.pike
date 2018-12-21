@@ -417,11 +417,6 @@ protected int parse_variables()
     buf = buf[l..];
     return 1;
   }
-  else if (request_type == "PUT" )
-  {
-    body_raw = buf;
-    return 1; // do not read body when method is PUT
-  }
 
   my_fd->set_read_callback(read_cb_post);
   return 0; // delay
@@ -598,46 +593,65 @@ Stdio.Buffer low_make_response_header(mapping m, Stdio.Buffer res)
          break;
    }
 
-   if (!m->type)
-      m->type = .filename_to_type(not_query);
+   array extra = ({});
+   if (m->extra_heads)
+   {
+      foreach (m->extra_heads;string name;array|string arr)
+      {
+        extra += ({ lower_case(name) });
+        if( name=="connection" && has_value(arr, "keep-alive") )
+          keep_alive=1;
+        foreach (Array.arrayify(arr);;string value)
+          radd(name, ": ", value);
+      }
+   }
 
-   if( m->error == 206 )
+   if( !has_value(extra, "content-type") )
+   {
+     if (!m->type)
+       m->type = .filename_to_type(not_query);
+     radd("Content-Type: ", m->type);
+   }
+
+   if( m->error == 206 && !has_value(extra, "content-range") )
       radd("Content-Range: bytes ", m->start,"-",m->stop,"/",
            has_index(m, "instance_size") ? m->instance_size : "*");
 
-   radd("Content-Type: ",m->type);
 
-   if( m->size >= 0 )
+   if( m->size >= 0 && !has_value(extra, "content-length") )
       radd("Content-Length: ",(string)m->size);
 
-   radd("Server: ", m->server || .http_serverid);
+   if( !has_value(extra, "server") )
+     radd("Server: ", m->server || .http_serverid);
 
    string http_now = .http_date(time(1));
-   radd("Date: ",http_now);
-
-   if (m->modified)
-      radd("Last-Modified: ", .http_date(m->modified));
-   else if (m->stat)
-      radd("Last-Modified: ", .http_date(m->stat->mtime));
-   else
-      radd("Last-Modified: ", http_now);
-
-   if (m->extra_heads)
-      foreach (m->extra_heads;string name;array|string arr)
-	 foreach (Array.arrayify(arr);;string value)
-	    radd(String.capitalize(name),": ",value);
-
-// FIXME: insert cookies here?
-   string cc = lower_case(request_headers["connection"]||"");
-
-   if( (protocol=="HTTP/1.1" && !has_value(cc,"close")) || cc=="keep-alive" )
+   if( !has_value(extra, "date") )
    {
+     radd("Date: ",http_now);
+   }
+
+   if( !has_value(extra, "last-modified") )
+   {
+     if (m->modified)
+       radd("Last-Modified: ", .http_date(m->modified));
+     else if (m->stat)
+       radd("Last-Modified: ", .http_date(m->stat->mtime));
+     else
+       radd("Last-Modified: ", http_now);
+   }
+
+   if( !has_value(extra, "connection") )
+   {
+     string cc = lower_case(request_headers["connection"]||"");
+     if( (protocol=="HTTP/1.1" && !has_value(cc,"close")) || cc=="keep-alive" )
+     {
        radd("Connection: keep-alive");
        keep_alive=1;
-   }
-   else
-   {
+     }
+     else
+     {
        radd("Connection: close");
+     }
    }
 
    res->add("\r\n");
@@ -886,8 +900,21 @@ void send_write()
 
    int n = send_buf->output_to(my_fd);
 
-   if ( n <= 0 || (send_stop==(sent+=n)) )
-      finish(sent==send_stop);
+   // SSL.File->write() does not guarantee that all data has been
+   // written upon return; this can cause premature disconnects.
+   // By waiting for any buffers to empty before calling finish, we 
+   // help ensure the full result has been transmitted.
+   if(my_fd->query_version) {
+     if( n == 0 && send_stop == sent)
+        finish(1);
+     else if(n <= 0)
+        finish(sent == send_stop);
+     else
+        sent += n;
+   } else {
+     if ( n <= 0 || (send_stop==(sent+=n)) )
+        finish(sent==send_stop);
+   }
 }
 
 void send_timeout()

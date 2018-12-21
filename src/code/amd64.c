@@ -631,7 +631,8 @@ static void mov_reg_mem16( enum amd64_reg from_reg, enum amd64_reg to_reg, ptrdi
 }
 #endif
 
-static void mov_imm_mem16( short imm, enum amd64_reg to_reg, ptrdiff_t offset )
+static void PIKE_UNUSED_ATTRIBUTE mov_imm_mem16( short imm, enum amd64_reg to_reg,
+						 ptrdiff_t offset )
 {
     opcode( 0x66 ); /* switch 32/16 */
 
@@ -2450,7 +2451,9 @@ void ins_f_byte(unsigned int b)
      LABEL_C;/* all done, res in RAX */
       /* free value, store result */
       push( P_REG_RAX );
+      sub_reg_imm(P_REG_RSP, 8);	/* Align on 16 bytes. */
       amd64_free_svalue( P_REG_RBX, 0 );
+      add_reg_imm(P_REG_RSP, 8);
       pop( P_REG_RAX );
       mov_reg_mem(P_REG_RAX,    P_REG_RBX, OFFSETOF(svalue, u.integer));
       mov_imm_mem(PIKE_T_INT, P_REG_RBX, OFFSETOF(svalue, tu.t.type));
@@ -2962,8 +2965,10 @@ int amd64_ins_f_jump(unsigned int op, int backward_jump)
       /* SVALUE_PTR optimization */
       mov_mem_reg( sp_reg, -3*sizeof(struct svalue)+8, P_REG_RDX );
       push( P_REG_RDX );
+      sub_reg_imm(P_REG_RSP, 8);	/* Align on 16 bytes. */
       /* Free old value. */
       amd64_free_svalue( P_REG_RDX, 0 );
+      add_reg_imm(P_REG_RSP, 8);
       pop( P_REG_RDX );
 
       /* Assign new value. */
@@ -3997,11 +4002,6 @@ void ins_f_byte_with_arg(unsigned int a, INT32 b)
     amd64_add_sp( 2 );
     return;
 
-  case F_PROTECT_STACK:
-    ins_debug_instr_prologue(a-F_OFFSET, b, 0);
-    amd64_load_fp_reg();
-    mov_imm_mem16(b, fp_reg, OFFSETOF(pike_frame, expendible_offset));
-    return;
   case F_MARK_AT:
     ins_debug_instr_prologue(a-F_OFFSET, b, 0);
     amd64_load_fp_reg();
@@ -4115,6 +4115,7 @@ void ins_f_byte_with_2_args(unsigned int a, INT32 b, INT32 c)
       add_reg_imm(P_REG_RBX, b*sizeof(struct svalue));
       if( c > 1 ) {
 	push(P_REG_RBP);
+        sub_reg_imm(P_REG_RSP, 8);	/* Align on 16 bytes. */
         add_reg_imm_reg(P_REG_RBX, c*sizeof(struct svalue), P_REG_RBP );
       }
 
@@ -4127,6 +4128,7 @@ void ins_f_byte_with_2_args(unsigned int a, INT32 b, INT32 c)
         add_reg_imm(P_REG_RBX, sizeof(struct svalue ) );
         cmp_reg_reg( P_REG_RBX, P_REG_RBP );
         jne(&label_A);
+        add_reg_imm(P_REG_RSP, 8);
 	pop(P_REG_RBP);
       }
     }

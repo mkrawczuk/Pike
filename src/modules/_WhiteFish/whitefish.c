@@ -9,7 +9,6 @@
 #include "module.h"
 #include "pike_macros.h"
 #include "interpret.h"
-#include "program.h"
 #include "module_support.h"
 
 #include "config.h"
@@ -411,7 +410,7 @@ static void f_do_query_phrase( INT32 args )
   struct array *_words, *_field;
 
   /* 1: Get all arguments. */
-  get_all_args( "do_query_phrase", args, "%a%a%*",
+  get_all_args( NULL, args, "%a%a%*",
 		&_words, &_field, &cb);
 
   if( _field->size != 65 )
@@ -503,7 +502,7 @@ static void f_do_query_and( INT32 args )
   struct array *_words, *_field, *_prox;
 
   /* 1: Get all arguments. */
-  get_all_args( "do_query_and", args, "%a%a%a%d%*",
+  get_all_args( NULL, args, "%a%a%a%d%*",
 		&_words, &_field, &_prox, &cutoff, &cb);
 
   if( _field->size != 65 )
@@ -604,7 +603,7 @@ static void f_do_query_or( INT32 args )
   struct array *_words, *_field, *_prox;
 
   /* 1: Get all arguments. */
-  get_all_args( "do_query_or", args, "%a%a%a%d%*",
+  get_all_args( NULL, args, "%a%a%a%d%*",
 		&_words, &_field, &_prox, &cutoff, &cb);
 
   if( _field->size != 65 )

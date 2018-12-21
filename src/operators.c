@@ -608,6 +608,15 @@ PMOD_EXPORT void o_cast(struct pike_type *type, INT32 run_time_type)
         }
 
       case T_OBJECT:
+	{
+	  struct program *p = program_from_type(type);
+	  if (p) {
+	    struct svalue s;
+	    SET_SVAL(s, T_PROGRAM, 0, program, p);
+	    apply_svalue(&s, 1);
+	    return;
+	  }
+	}
 	switch(TYPEOF(Pike_sp[-1]))
 	{
         case T_STRING: {
@@ -934,9 +943,19 @@ int low_check_soft_cast(struct svalue *s, struct pike_type *type)
     return 0;
   case T_ASSIGN:
   case PIKE_T_NAME:
-  case PIKE_T_ATTRIBUTE:
     type = type->cdr;
     goto loop;
+  case PIKE_T_ATTRIBUTE:
+    {
+      int ret;
+      if (!low_check_soft_cast(s, type->cdr)) return 0;
+      push_svalue(s);
+      ref_push_string((struct pike_string *)type->car);
+      SAFE_MAYBE_APPLY_MASTER("handle_attribute", 2);
+      ret = !SAFE_IS_ZERO(Pike_sp-1) || IS_UNDEFINED(Pike_sp-1);
+      pop_stack();
+      return ret;
+    }
   case T_AND:
     if (!low_check_soft_cast(s, type->car)) return 0;
     type = type->cdr;
@@ -2333,14 +2352,19 @@ PMOD_EXPORT void o_subtract(void)
  *!   	  occurrences, the leftmost is removed.
  *!   	@type array|mapping|multiset
  *!   	  The result is like @[arg1] but without the elements/indices
- *!   	  that match any in @[arg2] (according to @[`==] and, in the
- *!   	  case of mappings, @[hash_value]).
+ *!   	  that match any in @[arg2] (according to @[`>], @[`<], @[`==]
+ *!       and, in the case of mappings, @[hash_value]).
  *!   @endmixed
  *!   The function is not destructive on the arguments - the result is
  *!   always a new instance.
  *!
  *! @note
  *!   In Pike 7.0 and earlier the subtraction order was unspecified.
+ *!
+ *! @note
+ *!   If this operator is used with arrays or multisets containing objects
+ *!   which implement @[lfun::`==()] but @b{not@} @[lfun::`>()] and
+ *!   @[lfun::`<()], the result will be undefined.
  *!
  *! @seealso
  *!   @[`+()]
@@ -2714,12 +2738,18 @@ static void speedup(INT32 args, void (*func)(void))
  *!   	@type array|mapping|multiset
  *!   	  The result is like @[arg1] but only with the
  *!   	  elements/indices that match any in @[arg2] (according to
- *!   	  @[`==] and, in the case of mappings, @[hash_value]).
+ *!   	  @[`>], @[`<], @[`==] and, in the case of mappings,
+ *!       @[hash_value]).
  *!   	@type type|program
  *!   	  Type intersection of @[arg1] and @[arg2].
  *!   @endmixed
  *!   The function is not destructive on the arguments - the result is
  *!   always a new instance.
+ *!
+ *! @note
+ *!   If this operator is used with arrays or multisets containing objects
+ *!   which implement @[lfun::`==()] but @b{not@} @[lfun::`>()] and
+ *!   @[lfun::`<()], the result will be undefined.
  *!
  *! @seealso
  *!   @[`|()], @[lfun::`&()], @[lfun::``&()]
@@ -2945,8 +2975,8 @@ PMOD_EXPORT void o_or(void)
  *!     @type array
  *!       The result is an array with the elements in @[arg1]
  *!       concatenated with those in @[arg2] that doesn't occur in
- *!       @[arg1] (according to @[`==]). The order between the
- *!       elements that come from the same argument is kept.
+ *!       @[arg1] (according to @[`>], @[`<], @[`==]). The order
+ *!       between the elements that come from the same argument is kept.
  *!
  *!       Every element in @[arg1] is only matched once against an
  *!       element in @[arg2], so if @[arg2] contains several elements
@@ -2960,14 +2990,19 @@ PMOD_EXPORT void o_or(void)
  *!     @type multiset
  *!       The result is like @[arg1] but extended with the entries in
  *!       @[arg2] that doesn't already occur in @[arg1] (according to
- *!       @[`==]). Subsequences with orderwise equal entries (i.e.
- *!       where @[`<] returns false) are handled just like the array
- *!       case above.
+ *!       @[`>], @[`<] and @[`==]). Subsequences with orderwise equal
+ *!       entries (i.e. where @[`<] returns false) are handled just
+ *!       like the array case above.
  *!     @type type|program
  *!       Type union of @[arg1] and @[arg2].
  *!   @endmixed
  *!   The function is not destructive on the arguments - the result is
  *!   always a new instance.
+ *!
+ *! @note
+ *!   If this operator is used with arrays or multisets containing objects
+ *!   which implement @[lfun::`==()] but @b{not@} @[lfun::`>()] and
+ *!   @[lfun::`<()], the result will be undefined.
  *!
  *! @seealso
  *!   @[`&()], @[lfun::`|()], @[lfun::``|()]
@@ -3182,9 +3217,9 @@ PMOD_EXPORT void o_xor(void)
  *!     @type array
  *!       The result is an array with the elements in @[arg1] that
  *!       doesn't occur in @[arg2] concatenated with those in @[arg2]
- *!       that doesn't occur in @[arg1] (according to @[`==]). The
- *!       order between the elements that come from the same argument
- *!       is kept.
+ *!       that doesn't occur in @[arg1] (according to @[`>], @[`<] and
+ *!       @[`==]). The order between the elements that come from the
+ *!       same argument is kept.
  *!
  *!       Every element is only matched once against an element in the
  *!       other array, so if one contains several elements that are
@@ -3197,7 +3232,7 @@ PMOD_EXPORT void o_xor(void)
  *!     @type multiset
  *!       The result is like @[arg1] but with the entries from @[arg1]
  *!       and @[arg2] that are different between them (according to
- *!       @[hash_value] and @[`==]). Subsequences with orderwise equal
+ *!       @[`>], @[`<] and @[`==]). Subsequences with orderwise equal
  *!       entries (i.e. where @[`<] returns false) are handled just
  *!       like the array case above.
  *!     @type type|program
@@ -3206,6 +3241,11 @@ PMOD_EXPORT void o_xor(void)
  *!   @endmixed
  *!   The function is not destructive on the arguments - the result is
  *!   always a new instance.
+ *!
+ *! @note
+ *!   If this operator is used with arrays or multisets containing objects
+ *!   which implement @[lfun::`==()] but @b{not@} @[lfun::`>()] and
+ *!   @[lfun::`<()], the result will be undefined.
  *!
  *! @seealso
  *!   @[`&()], @[`|()], @[lfun::`^()], @[lfun::``^()]
@@ -5529,7 +5569,7 @@ static void f_string_assignment_index(INT32 args)
   ptrdiff_t len;
   INT_TYPE i, p;
 
-  get_all_args("string[]", args, "%i", &p);
+  get_all_args(NULL, args, "%i", &p);
 
   if (!THIS->s) {
     Pike_error("Indexing uninitialized string_assignment.\n");
@@ -5557,7 +5597,7 @@ static void f_string_assignment_assign_index(INT32 args)
   union anything *u;
   ptrdiff_t len;
 
-  get_all_args("string[]=",args,"%i%i",&p,&j);
+  get_all_args(NULL, args, "%i%i", &p, &j);
 
   if((u=get_pointer_if_this_type(THIS->lval, T_STRING)))
   {

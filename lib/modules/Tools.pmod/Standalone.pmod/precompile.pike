@@ -370,6 +370,9 @@ int parse_type(array t, int p)
 	  case "type":
 	  case "string":
 	    if(arrayp(t[p])) p++;
+	  case "utf8_string":
+	  case "sprintf_format":
+	  case "sprintf_args":
 	  case "bignum":
 	  case "longest":
 	  case "float":
@@ -584,6 +587,7 @@ class PikeType
 	case "8":
 	case "9":
 	case "bignum":
+        case "sprintf_args":
 	  return "mixed";
 
 	  // FIXME: Guess the special "longest" type ought to be
@@ -605,6 +609,10 @@ class PikeType
       case "void":
       case "zero":
 	return ret;
+
+      case "utf8_string":
+      case "sprintf_format":
+	return "string";
 
 	default: return "object";
       }
@@ -654,6 +662,7 @@ class PikeType
 	case "8":
 	case "9":
 
+        case "sprintf_args":
 	case "mixed":
 	  return ({
 	    "int",
@@ -686,6 +695,10 @@ class PikeType
       case "void":
       case "zero":
 	return ({ ret });
+
+      case "utf8_string":
+      case "sprintf_format":
+	return ({ "string" });
 
 	case "bignum":
 	case "longest":
@@ -747,6 +760,7 @@ class PikeType
 	case "float":
 	  return (may_be_void_or_zero (1, 2) == 1 ?
 		  "struct svalue *" : "FLOAT_TYPE");
+        case "utf8_string": case "sprintf_format":
 	case "string": return "struct pike_string *";
 
 	case "array":
@@ -761,6 +775,7 @@ class PikeType
 	case "function":
 	case "mixed":
 	case "bignum":
+        case "sprintf_args":
 	  if (is_struct_entry) {
 	    return "struct svalue";
 	  } else {
@@ -875,6 +890,9 @@ class PikeType
 	    return sprintf("tNStr(%s)",
 			   stringify(sprintf("\010%4c%4c", low, high)));
 	  }
+	case "utf8_string": return "tUtf8Str";
+        case "sprintf_format": return "tAttr(\"sprintf_format\", tStr)";
+        case "sprintf_args": return "tAttr(\"sprintf_args\", tMix)";
 	case "program": return "tPrg(tObj)";
 	case "any":     return "tAny";
 	case "mixed":   return "tMix";
@@ -978,6 +996,15 @@ class PikeType
 		      args[1]->t ==  "2147483647" ? "" : args[1]->t);
 	  if(has_suffix(ret, "(..)")) return ret[..sizeof(ret)-5];
 	  return ret;
+
+        case "utf8_string":
+	  return "utf8_string";
+
+        case "sprintf_format":
+	  return "string";
+
+        case "sprintf_args":
+	  return "mixed";
 
 	case "bignum":
 	case "longest":
@@ -1272,6 +1299,15 @@ array(int) clamp_int_range(PikeType complex_type, string ranged_type)
       if (res[0] > res[1]) return UNDEFINED;
       return res;
     }
+
+  case "sprintf_format":
+    return ({ -0x80000000, 0x7fffffff });
+
+  case "utf8_string":
+    if (ranged_type == "string") {
+      return ({ 0, 255 });
+    }
+    // FALL_THROUGH
   default:
     if (((string)complex_type->t) == ranged_type) {
       array(PikeType) args = complex_type->args;
@@ -1804,12 +1840,12 @@ array generate_overload_func_for(array(FuncData) d,
 
     mapping m=y[best_method];
     mapping m2=m+([]);
-    foreach(indices(m), string type)
+    foreach(sort(indices(m)), string type)
       {
 	array tmp=m[type];
 	if(tmp && sizeof(tmp))
 	{
-	  foreach(indices(m), string t2)
+	  foreach(sort(indices(m)), string t2)
 	    {
 	      if(equal(tmp, m[t2]) && !sizeof(tmp ^ m[t2]))
 	      {
@@ -1833,7 +1869,7 @@ array generate_overload_func_for(array(FuncData) d,
 			 indent,
 			 attributes->errname || name,
 			 best_method+1,
-			 indices(m2)*"|")),
+			 sort(indices(m2))*"|")),
 	PC.Token(sprintf("%*n}\n",indent)),
 	});
   }
@@ -2272,7 +2308,7 @@ sprintf("        } else {\n"
 	 * variable definition
 	 */
 	string structname = base+"_struct";
-	string this=sprintf("((struct %s *)(Pike_interpreter.frame_pointer->current_storage))",structname);
+	string this = sprintf("((struct %s *)(Pike_interpreter.frame_pointer->current_storage + %s_storage_offset))", structname, base);
 
 	/* FIXME:
 	 * Add runtime debug to these defines...
@@ -3081,8 +3117,9 @@ array resolve_obj_defines()
   if( sizeof( need_obj_defines ) )
   {
     res += ({ "{ int i=0;\n"});
-    foreach( need_obj_defines; string key; string id )
+    foreach( sort(indices(need_obj_defines)), string key )
     {
+      string id = need_obj_defines[key];
       int local_id = ++gid;
       res += ({
         sprintf("#ifndef %s\n"
@@ -3387,8 +3424,9 @@ int main(int argc, array(string) argv)
   if( sizeof(map_types) )
   {
     x += ({ "  switch(id) {\n" });
-    foreach( map_types; int i; string how )
+    foreach( sort(indices(map_types)), int i )
     {
+      string how = map_types[i];
       if( how[0] )
         x += ({ "#ifdef "+how[0]+"\n" });
       x += ({  "  case "+i+":\n    "+how[1]+"\n    break;\n" });
@@ -3460,7 +3498,7 @@ int main(int argc, array(string) argv)
   x=recursive(replace,x,PC.Token("OPTIMIZE",0),tmp->optfuncs);
 
   array(string) cond_used = ({});
-  foreach( check_used; string key; )
+  foreach( sort(indices(check_used)), string key)
   {
     if( find_identifier( x, key ) )
       tmp->declarations +=({ "#define "+key+"_used 1\n" });

@@ -205,11 +205,42 @@ protected int ponder_answer( int|void start_position )
       sscanf(s,"%[!-9;-~]%*[ \t]:%*[ \t]%s",n,d);
       switch(n=lower_case(n))
       {
-	 case "set-cookie":
-	    headers[n]=(headers[n]||({}))+({d});
-	    break;
-	 default:
-	   headers[n]=d;
+      case "set-cookie":
+        headers[n]=(headers[n]||({}))+({d});
+        break;
+
+      case "accept-ranges":
+      case "age":
+      case "connection":
+      case "content-type":
+      case "content-encoding":
+      case "content-range":
+      case "content-length":
+      case "date":
+      case "etag":
+      case "keep-alive":
+      case "last-modified":
+      case "location":
+      case "retry-after":
+      case "transfer-encoding":
+        headers[n]=d;
+        break;
+
+      case "allow":
+      case "cache-control":
+      case "vary":
+        if( headers[n] )
+          headers[n] += ", " +d;
+        else
+          headers[n] = d;
+        break;
+
+      default:
+        if( headers[n] )
+          headers[n] += "; " +d;
+        else
+          headers[n] = d;
+        break;
       }
    }
 
@@ -222,12 +253,28 @@ protected int ponder_answer( int|void start_position )
    return 1;
 }
 
-protected void close_connection()
+protected void close_connection(int|void terminate_now)
 {
-  Stdio.File con = this::con;
+  object(Stdio.File)|SSL.File con = this::con;
   if (!con) return;
   this::con = 0;
   con->set_callbacks(0, 0, 0, 0, 0);	// Clear any remaining callbacks.
+
+  if (terminate_now) {
+    // We don't want to wait for the close() to complete...
+    con->set_nonblocking();
+    con->close();
+
+    if (!con->shutdown) return;
+
+    // Probably SSL.
+    //
+    // Force the connection to shutdown.
+    con = con->shutdown();
+
+    if (!con) return;
+  }
+
   con->close();
 }
 
@@ -275,19 +322,41 @@ protected void connect(string server,int port,int blocking)
 {
    DBG("<- (connect %O:%d)\n",server,port);
 
-   int success;
-   if(con->_fd)
-     success = con->connect(server, port);
-   else
-     // What is this supposed to do? /mast
-     success = con->connect(server, port, blocking);
+   int count;
+   while(1) {
+     int success;
+     if(con->_fd)
+       success = con->connect(server, port);
+     else
+       // What is this supposed to do? /mast
+       // SSL.File?
+       success = con->connect(server, port, blocking);
 
-   if(!success) {
+     if (success) {
+       if (count) DBG("<- (connect success)\n");
+       break;
+     }
+
      errno = con->errno();
      DBG("<- (connect error: %s)\n", strerror (errno));
-     close_connection();
-     ok = 0;
-     return;
+     count++;
+     if ((count > 10) || (errno != System.EADDRINUSE)) {
+       DBG("<- (connect fail)\n");
+       close_connection();
+       ok = 0;
+       return;
+     }
+     // EADDRINUSE: All tuples hostip:hport:serverip:sport are busy.
+     // Wait for a bit to allow the OS to recycle some ports.
+     sleep(0.1);
+     if (con->_fd) {
+       // Normal file. Close and reopen.
+       // NB: This seems to be needed on Solaris 11 as otherwise
+       //     the connect() above instead will fail with ETIMEDOUT.
+       close_connection();
+       con = Stdio.File();
+       con->open_socket(-1, 0, server);
+     }
    }
 
    DBG("<- %O\n",request);
@@ -1275,8 +1344,12 @@ protected void _destruct()
      remove_call_out(async_id);
    }
    async_id = 0;
+   if(async_dns) {
+     async_dns->close();
+     async_dns = 0;
+   }
 
-   catch(close());
+   catch(close_connection(1));
 }
 
 //! Close all associated file descriptors.
@@ -1290,15 +1363,18 @@ void close()
   }
 }
 
-private int(0..1) is_empty_response() {
-  // FIXME: a response to a HEAD request also does not have a body
-  return (status >= 100 && status < 200 || status == 204 || status == 304);
+private int(0..1) is_empty_response()
+{
+  return (status >= 100 && status < 200) ||
+    (status == 204) || (status == 304) ||
+    (request && (upper_case(request[..4]) == "HEAD "));
 }
 
-private int(0..1) body_is_fetched() {
+private int(0..1) body_is_fetched()
+{
   // There is no body in these requests
   // and the content-length header must be ignored
-  if (status >= 100 && status < 200 || status == 204 || status == 304 || !con) {
+  if (is_empty_response() || !con) {
     return 1;
   }
 

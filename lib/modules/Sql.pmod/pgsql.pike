@@ -83,6 +83,7 @@ private int portalbuffersize = PORTALBUFFERSIZE;
 private int timeout = QUERYTIMEOUT;
 private array connparmcache;
 private int reconnected;
+private int lastping = time(1);
 
 protected string _sprintf(int type) {
   string res;
@@ -256,9 +257,15 @@ protected void create(void|string host, void|string database,
 //! @seealso
 //!   @[is_open()]
 /*semi*/final int ping() {
+  int t, ret;
   waitauthready();
-  return is_open()
-   && !catch(proxy.c->start()->sendcmd(FLUSHSEND)) ? !!reconnected : -1;
+  if ((ret = is_open())
+     // Pinging more frequently than MINPINGINTERVAL seconds
+     // is suppressed to avoid artificial TCP-ACK latency
+   && (t = time(1)) - lastping > MINPINGINTERVAL
+   && (ret = !catch(proxy.c->start()->sendcmd(FLUSHSEND))))
+    lastping = t;
+  return ret ? !!reconnected : -1;
 }
 
 //! Cancels all currently running queries in this session.
@@ -492,6 +499,9 @@ protected void _destruct() {
 }
 
 private void reset_dbsession() {
+  proxy.statementsinflight->wait_till_drained();
+  proxy.delayederror = 0;
+  error(1);
   big_query("ROLLBACK");
   big_query("RESET ALL");
   big_query("CLOSE ALL");
@@ -1055,10 +1065,11 @@ private void startquery(int forcetext, .pgsql_util.Result portal, string q,
       q = .sql_util.emulate_bindings(q, bindings, this),
       paramValues = .pgsql_util.emptyarray;
     else {
-      int pi = 0, rep = 0;
+      int pi = 0;
       paramValues = allocate(sizeof(bindings));
       from = allocate(sizeof(bindings));
-      array(string) to = allocate(sizeof(bindings));
+      array(string) litfrom, litto, to = allocate(sizeof(bindings));
+      litfrom = litto = .pgsql_util.emptyarray;
       foreach (bindings; mixed name; mixed value) {
         if (stringp(name)) {	       // Throws if mapping key is empty string
           if (name[0] != ':')
@@ -1080,19 +1091,23 @@ private void startquery(int forcetext, .pgsql_util.Result portal, string q,
           if (!has_value(q, name))
             continue;
         }
-        from[rep] = name;
-        string rval;
-        if (multisetp(value))		// multisets are taken literally
-          rval = indices(value)*",";	// and bypass the encoding logic
-        else {
-          paramValues[pi++] = value;
-          rval = sprintf("$%d", pi);
+        if (multisetp(value)) {			// multisets are taken literally
+           litto += ({indices(value)*","});	// and bypass the encoding logic
+           litfrom += ({name});
+        } else {
+          paramValues[pi] = value;
+          to[pi] = sprintf("$%d", pi + 1);
+          from[pi++] = name;
         }
-        to[rep++] = rval;
       }
-      if(rep--)
-        q = replace(q, from = from[..rep], to = to[..rep]);
-      paramValues = pi ? paramValues[..pi-1] : .pgsql_util.emptyarray;
+      if (pi--) {
+        paramValues = paramValues[.. pi];
+        q = replace(q, litfrom += from = from[.. pi], litto += to = to[.. pi]);
+      } else {
+        paramValues = .pgsql_util.emptyarray;
+        if (sizeof(litfrom))
+          q = replace(q, litfrom, litto);
+      }
       from = ({from, to, paramValues});
     }
   } else
@@ -1177,7 +1192,8 @@ private void startquery(int forcetext, .pgsql_util.Result portal, string q,
 //! streaming of multiple simultaneous queries through the same connection.
 //!
 //! @seealso
-//!   @[big_query()], @[big_typed_query()], @[Sql.Connection], @[Sql.Result]
+//!   @[big_query()], @[big_typed_query()], @[streaming_typed_query()],
+//!   @[Sql.Connection], @[Sql.Result]
 /*semi*/final variant inline .pgsql_util.Result streaming_query(string q,
                                      void|mapping(string|int:mixed) bindings) {
   return big_query(q, bindings);
@@ -1189,6 +1205,16 @@ private void startquery(int forcetext, .pgsql_util.Result portal, string q,
 //! @seealso
 //!   @[big_query()], @[Sql.Connection], @[Sql.Result]
 /*semi*/final variant inline .pgsql_util.Result big_typed_query(string q,
+                                     void|mapping(string|int:mixed) bindings) {
+  return big_query(q, bindings, 1);
+}
+
+//! This function returns an object that allows streaming and typed
+//! results.
+//!
+//! @seealso
+//!   @[big_query()], @[Sql.Connection], @[Sql.Result]
+/*semi*/final variant inline .pgsql_util.Result streaming_typed_query(string q,
                                      void|mapping(string|int:mixed) bindings) {
   return big_query(q, bindings, 1);
 }

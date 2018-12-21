@@ -816,7 +816,7 @@ AS_VAR_POPDEF([ac_Framework])dnl
 m4_define([AH_CHECK_FRAMEWORK],
 [AH_TEMPLATE(AS_TR_CPP(HAVE_FRAMEWORK_$1),
         [Define to 1 if you have the `]$1[' framework (-framework ]$1[).])])
-
+dnl '`
 
 
 PIKE_AC_DEBUG
@@ -1325,6 +1325,8 @@ AC_ARG_ENABLE(pedantic, MY_DESCR([--enable-pedantic],
 
 AC_ARG_ENABLE(werror, MY_DESCR([--enable-werror],
    [enable -Werror compilation]))
+
+AC_SYS_COMPILER_FLAG_REQUIREMENTS
 
 if test "$cflags_is_set" = "no"; then
   if test "x$with_cdebug" = "xno" ; then
@@ -3004,7 +3006,23 @@ AC_CHECK_SIZEOF(long double, 0)
 AC_CHECK_SIZEOF(long, 4)
 AC_CHECK_SIZEOF(long long, 0)
 AC_CHECK_SIZEOF(__int64, 0)
-AC_CHECK_SIZEOF(time_t, 4)
+AC_CHECK_SIZEOF(time_t, 4, [
+#ifndef _LARGEFILE_SOURCE
+#  define _FILE_OFFSET_BITS 64
+#  define _TIME_BITS 64
+#  define _LARGEFILE_SOURCE
+#endif
+#if TIME_WITH_SYS_TIME
+# include <sys/time.h>
+# include <time.h>
+#else
+# if HAVE_SYS_TIME_H
+#  include <sys/time.h>
+# else
+#   include <time.h>
+# endif
+#endif
+])
 AC_CHECK_SIZEOF(__int128)
 AC_CHECK_SIZEOF(__int128_t)
 AC_CHECK_SIZEOF(unsigned __int128)
@@ -3021,6 +3039,23 @@ AC_MY_CHECK_TYPE(time_t,INT32)
 AC_MY_CHECK_TYPE(pri_t, short)
 
 AC_CHECK_SIZEOF(off_t, 4)
+AC_CHECK_SIZEOF(off64_t, 0)
+
+if test "x$ac_cv_sizeof_off64_t" = "x0"; then :; else
+  AC_MSG_CHECKING(if off64_t is a scalar integer)
+  AC_TRY_COMPILE([
+#include <stdio.h>
+#include <sys/types.h>
+
+off64_t var = 17;
+],[],[
+    AC_MSG_RESULT(yes)
+  ],[
+    AC_MSG_RESULT(no)
+    AC_DEFINE(HAVE_NON_SCALAR_OFF64_T, 1,
+              [Define if off64_t is a union or similar.])
+  ])
+fi
 
 AC_MSG_CHECKING(for sizeof anything)
 if test "$ac_cv_sizeof_long_double" != 0 -a \
@@ -4021,11 +4056,14 @@ AC_CHECK_FUNCS( \
  closefrom \
  crypt \
  fdwalk \
+ ftruncate64 \
  gethrtime \
  gethrvtime \
  getrlimit \
  getrusage \
  gettimeofday \
+ getwd \
+ get_current_dir_name \
  inet_ntop \
  gmtime_r \
  gmtime_s \
@@ -4039,6 +4077,7 @@ AC_CHECK_FUNCS( \
  sigvec \
  strcasecmp \
  times \
+ truncate64 \
  tzset \
  _snprintf \
  wait3 \
@@ -4055,7 +4094,7 @@ AC_CHECK_FUNCS( \
  alarm \
  fork1 \
  flock \
- lockf \
+ lockf lockf64 \
  setuid getuid seteuid geteuid \
  setgid getgid getegid \
  getpwent getpwnam getpwuid \
@@ -4100,7 +4139,6 @@ AC_CHECK_FUNCS( \
  thread_info \
  host_get_clock_service \
  posix_memalign \
- _dosmaperr \
 )
 
 # SunOS 4 realloc() returns NULL when reallocing NULL.
@@ -4257,6 +4295,202 @@ int accept(int, struct sockaddr *, Psocklen_t);
 AC_MSG_RESULT($pike_cv_accept_size_t *)
 AC_DEFINE_UNQUOTED(ACCEPT_SIZE_T, $pike_cv_accept_size_t)
 
+AC_MSG_CHECKING(for working getcwd)
+AC_CACHE_VAL(pike_cv_func_working_getcwd,
+[
+# First try getcwd(NULL, 0).
+# This is the working == yes case, and is true on glibc and win32.
+AC_TRY_RUN([
+#ifndef _LARGEFILE_SOURCE
+#  define _FILE_OFFSET_BITS 64
+#  define _LARGEFILE_SOURCE
+#  define _LARGEFILE64_SOURCE 1
+#endif
+/* HPUX needs these too... */
+#ifndef __STDC_EXT__
+#  define __STDC_EXT__
+#endif /* !__STDC_EXT__ */
+
+#ifndef POSIX_SOURCE
+#define POSIX_SOURCE
+#endif
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
+#ifdef HAVE_DIRECT_H
+#include <direct.h>
+#endif /* HAVE_DIRECT_H */
+#ifdef HAVE_SYS_WAIT_H
+#include <sys/wait.h>
+#endif
+#include <signal.h>
+
+#include <stdlib.h>
+#include <string.h>
+
+#ifndef __NT__
+int sig_child(int arg)
+{
+#ifdef HAVE_WAITPID
+  waitpid(-1,0,WNOHANG);
+#else
+#ifdef HAVE_WAIT3
+  wait3(0,WNOHANG,0);
+#else
+#ifdef HAVE_WAIT4
+  wait3(-1,0,WNOHANG,0);
+#else
+
+  /* Leave them hanging */
+
+#endif /* HAVE_WAIT4 */
+#endif /* HAVE_WAIT3 */
+#endif /* HAVE_WAITPID */
+
+#ifdef SIGNAL_ONESHOT
+  signal(SIGCHLD, sig_child);
+#endif
+}
+
+int sig_alarm() { exit(1); }
+#endif /* !__NT__ */
+
+int main()
+{
+  char *tmp;
+#ifndef __NT__
+  signal(SIGCHLD,sig_child);
+  signal(SIGALRM,sig_alarm);
+  alarm(4);
+#endif /* !__NT__ */
+  tmp=getcwd(0,0);
+  if(tmp && tmp[0] && (strlen(tmp) < 10000)) {
+    free(tmp);
+    exit(0);
+  }
+  exit(1);
+}
+],pike_cv_func_working_getcwd=yes,[
+# The getcwd(NULL, 0) case failed.
+# Retry with getcwd(NULL, 10000).
+# This is the working == some case, and is true on Solaris.
+AC_TRY_RUN([
+#ifndef _LARGEFILE_SOURCE
+#  define _FILE_OFFSET_BITS 64
+#  define _LARGEFILE_SOURCE
+#  define _LARGEFILE64_SOURCE 1
+#endif
+/* HPUX needs these too... */
+#ifndef __STDC_EXT__
+#  define __STDC_EXT__
+#endif /* !__STDC_EXT__ */
+
+#ifndef POSIX_SOURCE
+#define POSIX_SOURCE
+#endif
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
+#ifdef HAVE_DIRECT_H
+#include <direct.h>
+#endif /* HAVE_DIRECT_H */
+#ifdef HAVE_SYS_WAIT_H
+#include <sys/wait.h>
+#endif
+#include <signal.h>
+
+#include <stdlib.h>
+#include <string.h>
+
+#ifndef __NT__
+int sig_child(int arg)
+{
+#ifdef HAVE_WAITPID
+  waitpid(-1,0,WNOHANG);
+#else
+#ifdef HAVE_WAIT3
+  wait3(0,WNOHANG,0);
+#else
+#ifdef HAVE_WAIT4
+  wait3(-1,0,WNOHANG,0);
+#else
+
+  /* Leave them hanging */
+
+#endif /* HAVE_WAIT4 */
+#endif /* HAVE_WAIT3 */
+#endif /* HAVE_WAITPID */
+
+#ifdef SIGNAL_ONESHOT
+  signal(SIGCHLD, sig_child);
+#endif
+}
+
+int sig_alarm() { exit(1); }
+#endif /* !__NT__ */
+
+int main()
+{
+  char *tmp;
+#ifndef __NT__
+  signal(SIGCHLD,sig_child);
+  signal(SIGALRM,sig_alarm);
+  alarm(4);
+#endif /* !__NT__ */
+  tmp=getcwd(0,10000);
+  if(tmp && tmp[0] && (strlen(tmp) < 10000)) {
+    free(tmp);
+    exit(0);
+  }
+  exit(1);
+}
+],pike_cv_func_working_getcwd=some,
+  pike_cv_func_working_getcwd=no,
+  # NB: This should be unreachable.
+  pike_cv_func_working_getcwd=no)
+],
+  # Assume that getcwd(NULL, val) works.
+  pike_cv_func_working_getcwd=some)
+])
+
+if test "$pike_cv_func_working_getcwd" = yes; then
+  AC_MSG_RESULT(yes)
+  AC_DEFINE(HAVE_WORKING_GETCWD, [1])
+elif test "$pike_cv_func_working_getcwd" = some; then
+  AC_MSG_RESULT(some)
+  AC_DEFINE(HAVE_WORKING_GETCWD, [0])
+else
+  AC_MSG_RESULT(no)
+fi
+
+AC_MSG_CHECKING(if mkdir takes 1 or 2 arguments)
+AC_CACHE_VAL(pike_cv_func_mkdir_args,[
+AC_TRY_COMPILE([
+#ifndef _LARGEFILE_SOURCE
+#  define _FILE_OFFSET_BITS 64
+#  define _LARGEFILE_SOURCE
+#  define _LARGEFILE64_SOURCE 1
+#endif
+/* HPUX needs these too... */
+#ifndef __STDC_EXT__
+#  define __STDC_EXT__
+#endif /* !__STDC_EXT__ */
+
+#include <sys/types.h>
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
+#ifdef HAVE_DIRECT_H
+#include <direct.h>
+#endif
+],[
+  mkdir("conftestdir",0666);
+],pike_cv_func_mkdir_args=2,pike_cv_func_mkdir_args=1)
+])
+
+AC_MSG_RESULT($pike_cv_func_mkdir_args)
+AC_DEFINE_UNQUOTED(MKDIR_ARGS,$pike_cv_func_mkdir_args)
+
 if test x"$pike_cv_sys_os" = xWindows_NT ; then
  AC_DEFINE(HAVE_LOADLIBRARY)
  AC_DEFINE(HAVE_FREELIBRARY)
@@ -4353,6 +4587,24 @@ if test "$pike_cv_has_external_timezone" = "yes"; then
 fi
 
 AC_MSG_RESULT($pike_cv_has_external_timezone)
+
+AC_MSG_CHECKING(extern int altzone)
+
+AC_CACHE_VAL(pike_cv_has_external_altzone,[
+AC_TRY_LINK([
+#include <time.h>
+],[
+  int _tz;
+  _tz=altzone;
+  altzone=_tz;
+],pike_cv_has_external_altzone=yes,pike_cv_has_external_altzone=no)
+])
+
+if test "$pike_cv_has_external_altzone" = "yes"; then
+  AC_DEFINE(HAVE_EXTERNAL_ALTZONE)
+fi
+
+AC_MSG_RESULT($pike_cv_has_external_altzone)
 
 #############################################################################
 
@@ -5042,6 +5294,28 @@ if test "$with_machine_code" = "no"; then :; else
 #endif
     ], [], [
       pike_cv_machine_code_arch=arm64
+    ], [])
+    AC_TRY_COMPILE([
+#if defined(__GNUC__)
+#if !defined(__riscv) || __riscv_xlen != 32
+#error Not rv32 architecture
+#endif
+#else
+#error Unsupported compiler
+#endif
+    ], [], [
+      pike_cv_machine_code_arch=rv32
+    ], [])
+    AC_TRY_COMPILE([
+#if defined(__GNUC__)
+#if !defined(__riscv) || __riscv_xlen != 64
+#error Not rv64 architecture
+#endif
+#else
+#error Unsupported compiler
+#endif
+    ], [], [
+      pike_cv_machine_code_arch=rv64
     ], [])
   ])
   AC_MSG_RESULT($pike_cv_machine_code_arch)

@@ -304,6 +304,24 @@ PMOD_EXPORT void push_ulongest (UINT64 i)
   }
 }
 
+PMOD_EXPORT void ulongest_to_svalue_no_free(struct svalue *sv, UINT64 i)
+{
+  if (i <= MAX_INT_TYPE) {
+    SET_SVAL(*sv, PIKE_T_INT, NUMBER_NUMBER, integer, (INT_TYPE)i);
+  }
+  else {
+    MP_INT *mpz;
+
+    SET_SVAL(*sv, PIKE_T_OBJECT, 0, object, fast_clone_object(bignum_program));
+    mpz = OBTOMPZ(sv->u.object);
+#if SIZEOF_LONG >= SIZEOF_INT64
+    mpz_set_ui (mpz, i);
+#else
+    mpz_import (mpz, 1, 1, SIZEOF_INT64, 0, 0, &i);
+#endif	/* SIZEOF_LONG < SIZEOF_INT64 */
+  }
+}
+
 /*! @module Gmp
  *! GMP is a free library for arbitrary precision arithmetic,
  *! operating on signed integers, rational numbers, and floating point
@@ -700,7 +718,7 @@ static void mpzmod_encode_json(INT32 args)
  *! @expr{256@} and @expr{-256@}. The default base is 10.
  *!
  *! @note
- *!   The bases 37 to 62 are not available When compiled with GMP
+ *!   The bases 37 to 62 are not available when compiled with GMP
  *!   earlier than version 5.
  *! @seealso
  *!   @[cast]
@@ -2502,7 +2520,26 @@ PIKE_MODULE_INIT
   /* @decl constant version
    * The version of the current GMP library, e.g. "6.1.0".
    */
+#ifdef __NT__
+  /* NB: <gmp.h> lacks sufficient export declarations to export
+   *     and import variables like gmp_version to gmp.lib.
+   *     We thus need to look up the symbol by hand.
+   */
+  {
+    HINSTANCE gmp_dll = LoadLibrary("gmp");
+    if (gmp_dll) {
+      const char **gmp_version_var =
+	GetProcAddress(gmp_dll, DEFINETOSTR(gmp_version));
+      if (gmp_version_var) {
+	const char *gmp_version = *gmp_version_var;
+	add_string_constant("version", gmp_version, 0);
+      }
+      FreeLibrary(gmp_dll);
+    }
+  }
+#else
   add_string_constant("version", gmp_version, 0);
+#endif
 }
 
 PIKE_MODULE_EXIT

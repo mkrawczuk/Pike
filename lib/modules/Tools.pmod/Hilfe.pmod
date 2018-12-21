@@ -222,7 +222,7 @@ protected class CommandSet {
     }
 
     if(arg_check("assembler_debug")) {
-#if constant(_assembler_debug)
+#if constant(Debug.assembler_debug)
       e->assembler_debug_level = (int)words[2];
 #else
       write("Assembler debug not available.\n");
@@ -231,7 +231,7 @@ protected class CommandSet {
     }
 
     if(arg_check("compiler_trace")) {
-#if constant(_compiler_trace)
+#if constant(Debug.compiler_trace)
       e->compiler_trace_level = (int)words[2];
 #else
       write("Compiler trace not available.\n");
@@ -1360,7 +1360,7 @@ protected class ParserState {
   //! Hilfe prompt when entering multiline expressions.
   int(0..1) finishedp() {
     if(sizeof(pstack)) return 0;
-    if(low_state->in_token) return 0;
+    if(low_state->remains) return 0;
     if(!sizeof(pipeline)) return 1;
     if(sizeof(pipeline)==1 && whitespace[pipeline[0][0]]) {
       pipeline = ({});
@@ -1606,24 +1606,28 @@ class Evaluator {
   void add_buffer(string s)
   {
     // Tokenize the input
+    int(0..1) finished = state->finishedp();
     array(string) tokens = state->push_string(s+"\n");
     array(string) words = s/" ";
     string command = words[0];
 
-    // See if first token is a command and not a defined entity.
-    if(commands[command] && !has_index(constants, command) &&
-       !has_index(variables, command) && !has_index(functions, command) &&
-       (sizeof(words)==1 || words[1]!=";")) {
-      commands[command]->exec(this, s, words, tokens);
-      return;
-    }
+    if(finished)
+    {
+      // See if first token is a command and not a defined entity.
+      if(commands[command] && !has_index(constants, command) &&
+         !has_index(variables, command) && !has_index(functions, command) &&
+         (sizeof(words)==1 || words[1]!=";")) {
+        commands[command]->exec(this, s, words, tokens);
+        return;
+      }
 
-    // See if the command is executed in overridden mode.
-    if(sizeof(command) && command[0]=='.') {
-      command = command[1..];
-      if(commands[command]) {
-	commands[command]->exec(this, s, words, tokens);
-	return;
+      // See if the command is executed in overridden mode.
+      if(sizeof(command) && command[0]=='.') {
+        command = command[1..];
+        if(commands[command]) {
+          commands[command]->exec(this, s, words, tokens);
+          return;
+        }
       }
     }
 
@@ -2119,12 +2123,12 @@ class Evaluator {
 
   //! The current trace level.
   int trace_level;
-#if constant(_assembler_debug)
+#if constant(Debug.assembler_debug)
   //! The current assembler debug level.
   //! Only available if Pike is compiled with RTL debug.
   int assembler_debug_level;
 #endif
-#if constant(_compiler_trace)
+#if constant(Debug.compiler_trace)
   //! The current compiler trace level.
   //! Only available if Pike is compiled with RTL debug.
   int compiler_trace_level;
@@ -2159,6 +2163,7 @@ class Evaluator {
 
   protected string hch_errors = "";
   protected string hch_warnings = "";
+
   protected class HilfeCompileHandler (int stack_level) {
 
     protected void create() {
@@ -2294,13 +2299,13 @@ class Evaluator {
     program p;
     mixed err;
 
-#if constant(_assembler_debug)
+#if constant(Debug.assembler_debug)
     if(assembler_debug_level)
-      _assembler_debug(assembler_debug_level);
+      Debug.assembler_debug(assembler_debug_level);
 #endif
-#if constant(_compiler_trace)
+#if constant(Debug.compiler_trace)
     if(compiler_trace_level)
-      _compiler_trace(compiler_trace_level);
+      Debug.compiler_trace(compiler_trace_level);
 #endif
 
     float compile_time = gauge {
@@ -2308,11 +2313,11 @@ class Evaluator {
     };
     last_compile_time = (int)(compile_time*1000000);
 
-#if constant(_assembler_debug)
-    _assembler_debug(0);
+#if constant(Debug.assembler_debug)
+    Debug.assembler_debug(0);
 #endif
-#if constant(_compiler_trace)
-    _compiler_trace(0);
+#if constant(Debug.compiler_trace)
+    Debug.compiler_trace(0);
 #endif
 
     if(warnings||err)

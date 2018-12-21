@@ -13,7 +13,6 @@
 #include "bignum.h"
 #include "sscanf.h"
 #include "builtin_functions.h"
-#include "interpret.h"
 #include "cyclic.h"
 #include "backend.h"
 #include "fd_control.h"
@@ -26,14 +25,14 @@
 #include "module_support.h"
 #include "bitvector.h"
 #include "pike_search.h"
-
-/* Includes <gmp.h> */
-#include "bignum.h"
 #include "sprintf.h"
 
 #ifdef HAVE_ARPA_INET_H
 #include <arpa/inet.h>
 #endif /* HAVE_ARPA_INET_H */
+
+#define READ_CHUNKSIZE		32768
+#define WRITE_CHUNKSIZE		32768
 
 #define DEFAULT_CMOD_STORAGE static
 DECLARATIONS
@@ -148,17 +147,24 @@ PIKECLASS Buffer
     return 0;
   }
 
+  static void io_discard_bufstart( Buffer *io )
+  {
+      if ( LIKELY(!io->locked_move) )
+      {
+          memmove( io->buffer, io_read_pointer(io), io_len(io) );
+          io->len -= io->offset;
+          io->num_move++;
+          io->offset = 0;
+      }
+  }
+
   PMOD_EXPORT void io_trim( Buffer *io )
   {
       if( io->malloced && (io->offset > 64 || io->len > 64) && !io->locked)
       {
-          if( io->offset > 64 && (!io->locked_move && (io->offset > io_len(io))))
-          {
-              memmove( io->buffer, io_read_pointer(io), io_len(io) );
-              io->len -= io->offset;
-              io->num_move++;
-              io->offset = 0;
-          }
+          if( io->offset > 64 && io->offset > io_len(io) )
+              io_discard_bufstart(io);
+
           if( io->len > 64 && ((io->allocated > (io->len)*(1.0+io->max_waste))))
           {
               io->buffer = xrealloc( io->buffer, io->len );
@@ -212,7 +218,7 @@ PIKECLASS Buffer
   PMOD_EXPORT unsigned char *io_add_space_do_something( Buffer *io, size_t bytes, int force )
   {
     if( bytes && io->len+bytes < io->len )
-      Pike_error("Too large buffer, can not have more than %lu bytes",
+      Pike_error("Too large buffer, can not have more than %lu bytes.",
                  (size_t)-1);
 
 
@@ -228,19 +234,14 @@ PIKECLASS Buffer
      * as much.
      *
      */
-    if( LIKELY(!io->locked_move) )
+    if( UNLIKELY((force && io->offset)
+              || (io_len(io) && io->offset > io->allocated / 2)) )
     {
-      if( UNLIKELY((force && io->offset) || (io_len(io) && io->offset > io->allocated / 2)) )
-      {
-        /* more than 50% of the buffer is available before the read pointer,
-         * and we can discard that data. Move the data to the beginning, making
-         * room for more data.
-         */
-        memmove( io->buffer, io_read_pointer(io), io_len(io) );
-        io->num_move++;
-        io->len -= io->offset;
-        io->offset = 0;
-      }
+      /* more than 50% of the buffer is available before the read pointer,
+       * and we can discard that data. Move the data to the beginning, making
+       * room for more data.
+       */
+      io_discard_bufstart(io);
     }
 
     if( UNLIKELY(io->len + bytes > io->allocated) )
@@ -257,7 +258,7 @@ PIKECLASS Buffer
       {
           growth = bytes+1;
           if( io->allocated + growth < io->allocated )
-              Pike_error("Overflow in buffer size calculations\n");
+              Pike_error("Overflow in buffer size calculations.\n");
       }
       io->buffer = xrealloc( io->buffer, io->allocated + growth );
       io->num_malloc++;
@@ -684,7 +685,7 @@ PIKECLASS Buffer
     bytes = (mpz_sizeinbase( i, 2 )+7) / 8;
 
     if( bytes > width )
-      Pike_error("Number too large to store in %d bits\n", width*8);
+      Pike_error("Number too large to store in %d bits.\n", width*8);
 
     d = io_add_space( io, width, 0 );
     io->len += width;
@@ -799,7 +800,7 @@ PIKECLASS Buffer
         break;
       }
     }
-    Pike_error("Illegal argument (not an 8bit string or 8bit buffer object)\n");
+    Pike_error("Illegal argument (not an 8bit string or 8bit buffer object).\n");
   }
 
   /* NOTE: Can return negative integers. */
@@ -816,9 +817,9 @@ PIKECLASS Buffer
       INT64 i64;
       if( int64_from_bignum( &i64, s->u.object ) )
         return i64;
-      Pike_error("Too big bignum, can not fit in indicated width\n");
+      Pike_error("Too big bignum, can not fit in indicated width.\n");
     }
-    Pike_error("Non integer argument\n");
+    Pike_error("Non integer argument.\n");
   }
 
   static void io_append_svalue( Buffer *io, struct svalue *p )
@@ -832,7 +833,7 @@ PIKECLASS Buffer
         {
           struct pike_string *s = p->u.string;
 	  if( !s->len ) return;
-          if( s->size_shift ) Pike_error("Buffer only handles 8bit data\n");
+          if( s->size_shift ) Pike_error("Buffer only handles 8bit data.\n");
           if( !io->buffer )
           {
 #ifdef PIKE_DEBUG
@@ -882,7 +883,7 @@ PIKECLASS Buffer
           if( t != MEMOBJ_NONE )
             io_append( io, ptr, len );
           else
-            Pike_error("Unsupported argument type\n");
+            Pike_error("Unsupported argument type.\n");
         }
         break;
       case PIKE_T_INT:
@@ -931,10 +932,10 @@ PIKECLASS Buffer
     {
       while( 1 )
       {
-        unsigned char *ptr = io_add_space( io, 4096, 0 );
+        unsigned char *ptr = io_add_space( io, READ_CHUNKSIZE, 0 );
         int res;
 
-        res = fd_read( fd->box.fd, ptr, MINIMUM(4096,nbytes) );
+        res = fd_read( fd->box.fd, ptr, MINIMUM(READ_CHUNKSIZE, nbytes) );
 
         if( res == -1 && errno == EINTR )
           continue;
@@ -945,7 +946,7 @@ PIKECLASS Buffer
         nbytes -= res;
         io->len += res;
         bread += res;
-        if( res != 4096 || once || !nbytes )
+        if( res != READ_CHUNKSIZE || once || !nbytes )
             break;
       }
       io_set_events( io, fd, PIKE_BIT_FD_READ_OOB, PIKE_FD_READ );
@@ -955,12 +956,12 @@ PIKECLASS Buffer
       /* some other object. Just call read */
       while( nbytes )
       {
-        push_int( MINIMUM(4096,nbytes) );
+        push_int( MINIMUM(READ_CHUNKSIZE, nbytes) );
         safe_apply( f, "read", 1 );
         if( TYPEOF(Pike_sp[-1]) != PIKE_T_STRING || Pike_sp[-1].u.string->len == 0 )
           break;
         if( Pike_sp[-1].u.string->size_shift )
-            Pike_error("Can not handle non-8bit data\n");
+            Pike_error("Can not handle non-8bit data.\n");
         io_append( io, Pike_sp[-1].u.string->str, Pike_sp[-1].u.string->len );
         nbytes -= Pike_sp[-1].u.string->len;
         pop_stack();
@@ -1078,7 +1079,7 @@ PIKECLASS Buffer
 	  get_inherit_storage( f->u.object, ref->inherit_offset );
 	while( sz > written )
 	{
-	  ptrdiff_t rd = MINIMUM(sz-written,4096);
+	  ptrdiff_t rd = MINIMUM(sz-written, WRITE_CHUNKSIZE);
 	  unsigned char *ptr = io_read_pointer( io );
 	  ptrdiff_t res;
 	  res = fd_write( fd->box.fd, ptr, rd );
@@ -1100,7 +1101,7 @@ PIKECLASS Buffer
     /* Some other object or function. Just call it. */
     while( sz > written )
     {
-      size_t rd = MINIMUM(sz-written,4096);
+      size_t rd = MINIMUM(sz-written, WRITE_CHUNKSIZE);
       ptrdiff_t wr = io_call_write( io, f, rd );
       if( wr <= 0 )
       {
@@ -1108,7 +1109,7 @@ PIKECLASS Buffer
 	break;
       }
       written += wr;
-      if( wr < 4096 )
+      if( wr < WRITE_CHUNKSIZE )
 	break;
     }
     RETURN written;
@@ -1412,7 +1413,7 @@ PIKECLASS Buffer
 
     if( size_size < (int)sizeof(size_t) &&
         len > (((size_t)1)<<(8*size_size))-1 )
-      Pike_error("Too long string, need larger size field\n");
+      Pike_error("Too long string, need larger size field.\n");
 
     io_add_int( io, len, size_size );
     io_append_svalue( io, str );
@@ -1508,14 +1509,14 @@ PIKECLASS Buffer
     io_unwrite_on_error(io, &e);
 
     if( bpi < 0 )
-      Pike_error("Illegal int width\n");
+      Pike_error("Illegal int width.\n");
 
 #if SIZEOF_LONG == 4
       if( DO_INT32_MUL_OVERFLOW( l, bpi, &n ) )
 #else
       if( DO_INT64_MUL_OVERFLOW( l, bpi, &n ) )
 #endif
-        Pike_error("Result size exceeds ptrdiff_t size\n");
+        Pike_error("Result size exceeds ptrdiff_t size.\n");
 
     io_add_space( io, n, 0 );
     switch( bpi )
@@ -1604,7 +1605,7 @@ PIKECLASS Buffer
       /* hm, well. We could extend the buffer. Should we? */
       if( io_range_error(io, off ) )
         goto again;
-      Pike_error("Writing outside buffer\n");
+      Pike_error("Writing outside buffer.\n");
     }
   }
 
@@ -1814,7 +1815,8 @@ PIKECLASS Buffer
     }
   }
 
-  /*! @decl string(8bit) read_cstring(void|int sentinel)
+  /*! @decl string(8bit) read_cstring(void|int(8bit) sentinel, @
+   *!                                 void|int(8bit) escape)
    *!
    *! Reads a \0 terminated C-string and returns the
    *! string excluding the terminating \0.
@@ -1824,47 +1826,77 @@ PIKECLASS Buffer
    *! Note that pike string can not be longer than 0x7fffffff bytes (~2Gb).
    *!
    *! @param sentinel
-   *! A different character can be used as end sentinel of the string.
+   *!   A different character can be used as end sentinel of the string.
+   *!
+   *! @param escape
+   *!   An optional character used as a prefix to quote the following
+   *!   character. UNDEFINED and the same value as @[sentinel] mean
+   *!   that there is no escape character.
+   *!
+   *! @note
+   *!   Escape characters (if any) are left untouched in the returned string.
    *!
    *! @seealso
    *!   @[_search()]
    */
-  PIKEFUN string(8bit) read_cstring(void|int sentinel)
+  PIKEFUN string(8bit) read_cstring(void|int(8bit) sentinel,
+				    void|int(8bit) escape)
   {
-    INT64 len;
     Buffer *io = THIS;
-    struct pike_string *s;
-    ONERROR e;
-    int end = 0;
-    if( sentinel )
-      end = sentinel->u.integer;
+    int csentinel = sentinel ? sentinel->u.integer : 0;
 
-    io_rewind_on_error( io, &e );
-    len = 0;
-    do {
-      /* search the amount of data we know we have for each call to io_avail */
-      while( io_len(io) )
-      {
-        if( io_read_byte_uc(io)==end )
-          goto found_end;
-        len++;
-      }
-    }
-    while( io_avail( io, 1 ) );
-    goto fail;
+    if (!escape || (escape->u.integer == csentinel)) {
+      do {
+	if ( LIKELY(io_len(io)) )
+	{
+	  const char * start = (char*)io_read_pointer(io);
+	  const char * end = memchr(start, csentinel, io_len(io));
 
-  found_end:
-    io_rewind( io, len+1 );
-    s = io_read_string( io, len );
-
-    if( LIKELY(s) ) {
-      io_read_byte_uc(io);		  /* consume the terminating byte */
-      io_unset_rewind_on_error( io, &e );
-      push_string(s);
+	  if ( LIKELY(end) )
+	  {
+	    push_string(io_read_string(io, end - start));
+	    io_read_byte_uc(io);  /* consume the terminating sentinel byte */
+	    return;
+	  }
+	}
+      } while ( UNLIKELY(io_range_error(io, 0)) );
     } else {
-fail: CALL_AND_UNSET_ONERROR(e);
-      push_undefined();
+      int cescape = escape->u.integer;
+      do {
+	if ( LIKELY(io_len(io)) )
+	{
+	  const char * start = (char*)io_read_pointer(io);
+	  const char * end = memchr(start, csentinel, io_len(io));
+
+	  if ( LIKELY(end) )
+	  {
+	    /* Check if we have any escaped characters. */
+	    const char * esc = start;
+	    while (UNLIKELY(esc = memchr(esc, cescape, end - esc))) {
+	      esc += 2;
+	      if (end + 1 == esc) {
+		/* NB: The following is integer underflow safe;
+		 *   Worst case: end = start + io_len(io) - 1.
+		 *           ==> esc = start + io_len(io).
+		 *           ==> start + io_len - esc == 0.
+		 */
+		end = memchr(esc, csentinel, start + io_len(io) - esc);
+		if (UNLIKELY(!end)) {
+		  goto fail;
+		}
+	      }
+	    }
+	    push_string(io_read_string(io, end - start));
+	    io_read_byte_uc(io);  /* consume the terminating sentinel byte */
+	    return;
+	  }
+	}
+      fail:
+	;	/* NB: Some C-compilers require a statement after a label. */
+      } while ( UNLIKELY(io_range_error(io, 0)) );
     }
+
+    push_undefined();
   }
 
   /*! @decl protected int(-1..) _search(int(8bit) character, int|void start, @
@@ -2107,7 +2139,7 @@ fail: CALL_AND_UNSET_ONERROR(e);
     SET_ONERROR(_e, free_string_builder, &tmp);
     low_f_sprintf(args, &tmp);
     if( tmp.s->size_shift )
-      Pike_error("Buffer only handles 8bit data\n");
+      Pike_error("Buffer only handles 8bit data.\n");
     io_append( THIS, tmp.s->str, tmp.s->len );
     pop_n_elems(args);
     CALL_AND_UNSET_ONERROR(_e);
@@ -2197,9 +2229,9 @@ fail: CALL_AND_UNSET_ONERROR(e);
       {
         /* FIXME: Use real json error? */
         if( err )
-          Pike_error("Syntax error in json at offset %d: %s\n", -stop, err );
+          Pike_error("Syntax error in json at offset %d: %s,\n", -stop, err );
         else
-          Pike_error("Syntax error in json at offset %d\n", -stop );
+          Pike_error("Syntax error in json at offset %d.\n", -stop );
       }
     }
     else
@@ -2215,7 +2247,7 @@ fail: CALL_AND_UNSET_ONERROR(e);
           push_undefined();
         }
         else
-          Pike_error("Missing whitespace between json values at offset %d\n", stop );
+          Pike_error("Missing whitespace between json values at offset %d.\n", stop );
       }
       else
       {
@@ -2374,7 +2406,7 @@ fail: CALL_AND_UNSET_ONERROR(e);
 
   /*! @decl string(8bit) read( int n )
    *!
-   *! Read @[bytes] bytes of data from the buffer.
+   *! Read @[n] bytes of data from the buffer.
    *!
    *! If there is not enough data available this returns 0.
    *!

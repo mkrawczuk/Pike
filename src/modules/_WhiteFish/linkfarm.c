@@ -1,6 +1,11 @@
+/*
+|| This file is part of Pike. For copyright information see COPYRIGHT.
+|| Pike is distributed under GPL, LGPL and MPL. See the file COPYING
+|| for more information.
+*/
+
 #include "global.h"
 #include "stralloc.h"
-#include "global.h"
 #include "interpret.h"
 #include "program.h"
 #include "array.h"
@@ -134,7 +139,7 @@ static void f_linkfarm_add( INT32 args )
   struct pike_string *s;
   struct linkfarm *f = THIS;
 
-  get_all_args("add", args, "%W", &s);
+  get_all_args(NULL, args, "%W", &s);
   low_add(f, s);
   pop_n_elems(args);
 }

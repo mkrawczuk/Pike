@@ -20,25 +20,15 @@
  * Includes
  */
 
-#include "global.h"
-
-#ifdef HAVE_CONFIG_H
 #include "config.h"
-#endif /* HAVE_CONFIG_H */
+#include "module.h"
 
-#include "svalue.h"
-#include "object.h"
-#include "array.h"
-#include "stralloc.h"
 #include "interpret.h"
 #include "operators.h"
 #include "pike_compiler.h"
 #include "pike_types.h"
-#include "pike_memory.h"
 #include "threads.h"
 #include "module_support.h"
-#include "mapping.h"
-#include "multiset.h"
 #include "builtin_functions.h"
 #include "pike_macros.h"
 #include "version.h"
@@ -190,11 +180,6 @@ DEFINE_MUTEX(oracle_serialization_mutex);
 
 #ifndef Pike_thread_id
 #define Pike_thread_id thread_id
-#endif
-
-#ifndef Pike_sp
-#define Pike_sp sp
-#define Pike_fp fp
 #endif
 
 #ifndef CHECK_INTERPRETER_LOCK
@@ -801,7 +786,7 @@ OCIError *get_global_error_handle(void)
       time_t t;
       sword rc;
 
-      check_all_args("Oracle.Date",args,BIT_INT|BIT_STRING,0);
+      check_all_args(NULL,args,BIT_INT|BIT_STRING,0);
       switch(TYPEOF(*date))
       {
       case T_STRING:

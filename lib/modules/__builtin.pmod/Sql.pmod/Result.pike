@@ -14,6 +14,23 @@
 //! differs between different databases.
 int index;
 
+//! Increment the @[index].
+//!
+//! @param val
+//!   Value to increment the @[index] with. Defaults to @expr{1@}.
+//!
+//! @returns
+//!   Returns the new value of the @[index].
+//!
+//! This is a helper function for implementations to update the @[index].
+//!
+//! It is typically called from @[fetch_row()].
+protected int increment_index(int|void val)
+{
+  index += val || undefinedp(val);
+  return index;
+}
+
 //! Create a new Sql.Result object
 //!
 //! @param res
@@ -49,18 +66,33 @@ __deprecated__ array|this_program `master_res()
 
 //! @returns
 //!  The number of affected rows by this query.
+//!
+//! @seealso
+//!  @[status_command_complete()], @[num_rows()]
 int affected_rows() {
   return 0;
 }
 
 //! @returns
 //!  The command-complete status for this query.
+//!
+//! @seealso
+//!  @[affected_rows()]
 string status_command_complete() {
-  return eof() ? "" : 0;
+  return "";
 }
 
 //! @returns
 //!  The number of rows in the result.
+//!
+//! @note
+//!  Depending on the database implementation, this number
+//!  can still increase between subsequent calls if the results from
+//!  the query are not complete yet.  This function is only guaranteed to
+//!  return the correct count after EOF has been reached.
+//!
+//! @seealso
+//!  @[affected_rows()], @[eof()]
 int num_rows();
 
 //! @returns

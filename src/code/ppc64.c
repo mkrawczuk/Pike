@@ -28,6 +28,20 @@
 #define MAKE_TYPE_WORD(t,st) ((st)|((t)<<16))
 #endif
 
+#if _CALL_ELF == 2
+
+#define ADD_CALL(X) do {			\
+    INT64 func_=(INT64)(void*)(X);		\
+						\
+    SET_REG64(12, func_);			\
+    /* mtlr r12 */				\
+    MTSPR(12, PPC_SPREG_LR);			\
+    /* blrl */					\
+    BCLRL(20, 0);				\
+  } while(0)
+
+#else
+
 #define ADD_CALL(X) do {			\
     INT64 func_=(INT64)(void*)(X);		\
 						\
@@ -43,6 +57,8 @@
     /* blrl */					\
     BCLRL(20, 0);				\
   } while(0)
+
+#endif
 
 int ppc64_codegen_state = 0, ppc64_codegen_last_pc = 0;
 static int last_prog_id=-1;
@@ -364,21 +380,6 @@ static void ppc64_escape_catch(void)
   /* std r4,recoveries(pike_interpreter) */
   STD(PPC_REG_ARG2, PPC_REG_PIKE_INTERP,
       OFFSETOF(Pike_interpreter_struct, recoveries));
-  /* ld r4,save_expendible(r3) */
-  LD(PPC_REG_ARG2, PPC_REG_ARG1,
-     OFFSETOF(catch_context, save_expendible));
-  /* ld r5,locals(pike_fp) */
-  LD(PPC_REG_ARG3, PPC_REG_PIKE_FP,
-     OFFSETOF(pike_frame, locals));
-  /* subf r4,r5,r4 */
-  SUBF(PPC_REG_ARG2, PPC_REG_ARG3, PPC_REG_ARG2);
-  /* addi r5,0,sizeof(struct svalue) */
-  SET_REG32(PPC_REG_ARG3, sizeof(struct svalue));
-  /* divdu r4,r4,r5 */
-  DIVDU(PPC_REG_ARG2, PPC_REG_ARG2, PPC_REG_ARG3);
-  /* sth r4,expendible(pike_fp) */
-  STH(PPC_REG_ARG2, PPC_REG_PIKE_FP,
-      OFFSETOF(pike_frame, expendible_offset));
   /* ld r4,prev(r3) */
   LD(PPC_REG_ARG2, PPC_REG_ARG1,
      OFFSETOF(catch_context, prev));
@@ -402,9 +403,24 @@ static void maybe_update_pc(void)
   }
 }
 
+#ifdef OPCODE_INLINE_RETURN
+void ppc64_ins_entry(void)
+{
+  /* stdu r1, -128(r1) */
+  STDU(1, 1, -128);
+  /* mflr r0 */
+  MFSPR(0, PPC_SPREG_LR);
+  /* std r0, 144(r1) */
+  STD(0, 1, 144);
+  /* std r2, 120(r1) */
+  STD(2, 1, 120);
+}
+#endif /* OPCODE_INLINE_RETURN */
+
 void ins_f_byte(unsigned int b)
 {
   void *addr;
+  INT32 rel_addr;
 
   b-=F_OFFSET;
 #ifdef PIKE_DEBUG
@@ -454,10 +470,56 @@ void ins_f_byte(unsigned int b)
   case F_ESCAPE_CATCH - F_OFFSET:
     ppc64_escape_catch();
     return;
+
+#ifdef OPCODE_INLINE_RETURN
+  case F_CATCH - F_OFFSET:
+    /* Special argument for the F_CATCH instruction. */
+    addr = inter_return_opcode_F_CATCH;
+    /* bl .+4 */
+    BL(4);
+    /* mflr r3 */
+    MFSPR(PPC_REG_ARG1, PPC_SPREG_LR);
+    rel_addr = PIKE_PC;
+    /* addi r3, r3, offs */
+    ADDI(PPC_REG_ARG1, PPC_REG_ARG1, 4);
+    break;
+#endif
   }
 
   FLUSH_CODE_GENERATOR_STATE();
   ADD_CALL(addr);
+#ifdef OPCODE_INLINE_RETURN
+  if (instrs[b].flags & I_RETURN) {
+    /* cmpdi r3,-1 */
+    CMPI(1, PPC_REG_RET, -1);
+    /* bne .+24 */
+    BC(4, 2, 6);
+    /* ld r0, 144(r1) */
+    LD(0, 1, 144);
+    /* ld r2, 120(r1) */
+    LD(2, 1, 120);
+    /* addi r1, r1, 128 */
+    ADDI(1, 1, 128);
+    /* mtlr r0 */
+    MTSPR(0, PPC_SPREG_LR);
+    /* blr */
+    BCLR(20, 0);
+
+    if ((b + F_OFFSET) == F_RETURN_IF_TRUE) {
+      /* Kludge. We must check if the ret addr is
+       * orig_addr + JUMP_EPILOGUE_SIZE. */
+
+      /* mflr r0 */
+      MFSPR(0, PPC_SPREG_LR);
+      /* subf r0, r0, r3 */
+      SUBF(0, 0, PPC_REG_RET);
+      /* cmpldi r0, JUMP_EPILOGUE_SIZE */
+      CMPLI(1, 0, JUMP_EPILOGUE_SIZE*4);
+      /* beq .+12 */
+      BC(12, 2, 3);
+    }
+  }
+#endif
 #ifdef OPCODE_RETURN_JUMPADDR
   if (instrs[b].flags & I_JUMP) {
     /* This is the code that JUMP_EPILOGUE_SIZE compensates for. */
@@ -465,6 +527,12 @@ void ins_f_byte(unsigned int b)
     MTSPR(PPC_REG_RET, PPC_SPREG_LR);
     /* blr */
     BCLR(20, 0);
+
+#ifdef OPCODE_INLINE_RETURN
+    if (b == F_CATCH - F_OFFSET) {
+      Pike_compiler->new_program->program[rel_addr] += (PIKE_PC - rel_addr)*4;
+    }
+#endif
   }
 #endif
 }
@@ -714,8 +782,6 @@ void ppc64_decode_program(struct program *p)
   }
 }
 #endif
-
-#ifdef PIKE_DEBUG
 
 void ppc64_disassemble_code(void *addr, size_t bytes)
 {
@@ -1182,5 +1248,3 @@ void ppc64_disassemble_code(void *addr, size_t bytes)
     }
   }
 }
-
-#endif

@@ -251,6 +251,7 @@ static void init_mapping(struct mapping *m,
     }
   }
   add_ref(md);
+  gc_init_marker(md);
   m->data=md;
 #ifdef MAPPING_SIZE_DEBUG
   m->debug_size = md->size;
@@ -684,6 +685,7 @@ struct mapping_data *copy_mapping_data(struct mapping_data *md)
 
   nmd=(struct mapping_data *)xalloc(size);
   memcpy(nmd, md, size);
+  gc_init_marker(nmd);
   off=((char *)nmd) - ((char *)md);
 
   RELOC(nmd->free_list);
@@ -1642,6 +1644,33 @@ PMOD_EXPORT struct mapping *mkmapping(struct array *ind, struct array *val)
   for(e=0;e<ind->size;e++) low_mapping_insert(m, i++, v++, 2);
 
   return m;
+}
+
+PMOD_EXPORT void clear_mapping(struct mapping *m)
+{
+  struct mapping_data *md = m->data;
+  int flags = md->flags;
+
+  if (!md->size) return;
+  unlink_mapping_data(md);
+
+  switch (flags & MAPPING_WEAK) {
+  case 0: md = &empty_data; break;
+  case MAPPING_WEAK_INDICES: md = &weak_ind_empty_data; break;
+  case MAPPING_WEAK_VALUES: md = &weak_val_empty_data; break;
+  default: md = &weak_both_empty_data; break;
+  }
+
+  /* FIXME: Increment hardlinks & valrefs?
+   *    NB: init_mapping() doesn't do this.
+   */
+  add_ref(md);
+  /* gc_init_marker(md); */
+
+  m->data = md;
+#ifdef MAPPING_SIZE_DEBUG
+  m->debug_size = md->size;
+#endif
 }
 
 /* deferred mapping copy! */

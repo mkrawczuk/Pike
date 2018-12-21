@@ -1,4 +1,3 @@
-
 dnl Some compatibility with Autoconf 2.50+. Not complete.
 dnl newer Autoconf calls substr m4_substr
 ifdef([substr], ,[m4_copy([m4_substr],[substr])])
@@ -1274,9 +1273,19 @@ EOF
 
 #############################################################################
 
+AC_DEFUN(AC_SYS_COMPILER_FLAG_REQUIREMENTS,
+[
+  # The following are needed to detect broken handling of __STDC__ == 1
+  # on Solaris with old header files.
+  AC_CHECK_HEADER(sys/types.h)
+  AC_CHECK_SIZEOF(off64_t, 0)
+])
+
 # option, cache_name, variable, do_if_failed, do_if_ok, paranoia_test
 AC_DEFUN(AC_SYS_COMPILER_FLAG,
 [
+  dnl AC_REQUIRE(AC_SYS_COMPILER_FLAG_REQUIREMENTS)
+
   AC_MSG_CHECKING($1)
   if test "x[$]pike_disabled_option_$2" = "xyes"; then
     AC_MSG_RESULT(disabled)
@@ -1288,20 +1297,31 @@ AC_DEFUN(AC_SYS_COMPILER_FLAG,
       CPPFLAGS="[$]OLD_CPPFLAGS $1"
       old_ac_link="[$]ac_link"
       ac_link="[$]old_ac_link 2>conftezt.out.2"
-      AC_TRY_RUN([
+      AC_TRY_LINK([
+#ifdef HAVE_SYS_TYPES_H
+#include <sys/types.h>
+#endif
+#ifdef HAVE_SYS_TYPES_H
+#if SIZEOF_OFF64_T != 0
+        /* Make sure that __STDC__ doesn't get set to 1
+         * on Solaris with old headers.
+         */
+        off64_t off64_value = (off64_t)17;
+#endif
+#endif
         int foo;
-        int main(int argc, char **argv)
+        int bar(int argc, char **argv)
         {
-	  /* The following code triggs gcc:s generation of aline opcodes,
-	   * which some versions of as does not support.
-	   */
+          /* The following code triggs gcc:s generation of aline opcodes,
+           * which some versions of as does not support.
+           */
 	  if (argc > 0) argc = 0;
 	  return argc;
         }
+      ],[
+        return bar(0, (void *)0);
       ],pike_cv_option_$2=yes,
-        pike_cv_option_$2=no, [
-        AC_TRY_LINK([], [], pike_cv_option_$2=yes, pike_cv_option_$2=no)
-      ])
+        pike_cv_option_$2=no)
       if grep -i 'unrecognized option' <conftezt.out.2 >/dev/null; then
         pike_cv_option_$2=no
       elif grep -i 'unknown option' <conftezt.out.2 >/dev/null; then
@@ -1809,7 +1829,7 @@ AC_DEFUN(PIKE_CHECK_ABI_DIR,
 		*ELFCLASS32*)
 		  abi_32=yes
 		  ;;
-		*ELF4*)
+		*ELF64*)
 		  abi_64=yes
 		  ;;
 		*ELF32*)
@@ -1990,20 +2010,48 @@ AC_DEFUN(PIKE_LOW_PKG_CONFIG,
   $2="[$]$2 ${pkg_stuff}"
 ])
 
-dnl package
+dnl package, on_success_opt, on_failure_opt
 AC_DEFUN(PIKE_PKG_CONFIG,
 [
   AC_REQUIRE([PIKE_PROG_PKG_CONFIG])dnl
+  pike_cv_pkg_config_$1=no
   if test "${PKG_CONFIG}" = no; then :; else
     AC_MSG_CHECKING([if a pkg-config based $1 is installed])
     if "${PKG_CONFIG}" "$1"; then
       AC_MSG_RESULT(yes)
+      PKG_SAVE_CPPFLAGS="$CPPFLAGS"
+      PKG_SAVE_CFLAGS="$CFLAGS"
+      PKG_SAVE_LDFLAGS="$LDFLAGS"
+      PKG_SAVE_LIBS="$LIBS"
       PIKE_LOW_PKG_CONFIG([$1], [CPPFLAGS], [--cflags-only-I])
       PIKE_LOW_PKG_CONFIG([$1], [CFLAGS],   [--cflags-only-other])
       PIKE_LOW_PKG_CONFIG([$1], [LDFLAGS],  [--libs-only-L])
       PIKE_LOW_PKG_CONFIG([$1], [LIBS],     [--libs-only-l --libs-only-other])
+      AC_MSG_CHECKING([if $1 breaks compilation...])
+      AC_TRY_COMPILE([
+#include <stdio.h>
+],[
+        printf("Hello, world\n");
+	exit(0);
+      ],[
+	AC_MSG_RESULT([no, everything seems ok])
+	pike_cv_pkg_config_$1=yes
+      ],[
+	AC_MSG_RESULT([yes, do not use])
+	CPPFLAGS="$PKG_SAVE_CPPFLAGS"
+	CFLAGS="$PKG_SAVE_CFLAGS"
+	LDFLAGS="$PKG_SAVE_LDFLAGS"
+	LIBS="$PKG_SAVE_LIBS"
+      ])
     else
       AC_MSG_RESULT(no)
     fi
   fi
+  ifelse([$2$3], , , [
+    if test "x$pike_cv_pkg_config_$1" = "xno"; then
+      ifelse([$3], , :, [$3])
+    else
+      ifelse([$2], , :, [$2])
+    fi
+  ])
 ])

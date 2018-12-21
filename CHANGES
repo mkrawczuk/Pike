@@ -121,6 +121,24 @@ o Operator functions
   operator LFUNs, so this change should address many potential hidden
   errors.
 
+o Protocols.HTTP.Server
+
+  The server module will now read payloads for HTTP PUT requests, just
+  as any other method. Previously it would stop reading the body and
+  it was up to the caller to read enough data from the socket and
+  combine with already read data.
+
+  Setting "connection" header in the "extra_heads" to Request object
+  method response_and_finish() will now control if keep-alive should be
+  used or not. Otherwise it will be decided by the clients request
+  headers, as previously.
+
+  The headers "content-type", "content-range", "content-length",
+  "server", "date" and "last-modified" will not be added or
+  overwritten if provided in the "extra_heads".
+
+  Header names in "extra_heads" will not have their case modified.
+
 
 Incompatible changes
 --------------------
@@ -213,6 +231,11 @@ o Crypto.Checksum
   adler32 and Castagnoli CRC (CRC32C).
 
   NB: In the future these may be amended to support the Crypto.Hash API.
+
+o Parser.ECMAScript
+
+  This module simply provides a token splitter for
+  ECMAScript/JavaScript.
 
 o Web.EngineIO & Web.SocketIO
 o Protocols.HTTP2
@@ -407,8 +430,11 @@ o The self testing framework now supports *.test-files.
 
 o Thread
 
-  _sprintf() improvements: Thread.Mutex now prints the ID of the thread
-  holding the lock, and thread IDs are shown as hexadecimal numbers.
+  - _sprintf() improvements: Thread.Mutex now prints the ID of the thread
+    holding the lock, and thread IDs are shown as hexadecimal numbers.
+
+  - Thread.Farm now supports a callback for thread creation and termination
+    for the purpose of tracking thread names.
 
 o sprintf %x
 
@@ -498,3 +524,10 @@ o C99 assumed
 
   The configure tests will not check for functions defined in C99
   anymore and C99 compiler support is assumed.
+
+Optimizations
+-------------
+
+o Removed the GC marker hash table. For types which require GC markers,
+  they are now allocated as parf of the data type. This significantly
+  improves GC performance ( up to a factor if 2 in some situations ).

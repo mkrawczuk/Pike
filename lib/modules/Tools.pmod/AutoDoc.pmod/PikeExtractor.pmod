@@ -516,7 +516,19 @@ private class Extractor {
 
       if (doc) {
         if (wasNonGroupable) {
-          object(PikeObject) d = [object(PikeObject)] decls[0];
+          object(PikeObject) d;
+	  foreach(decls, object(PikeObject) po) {
+	    if (object_variablep(po, "documentation")) {
+	      d = po;
+	      break;
+	    }
+	    werror("Warning: Skipping declaration %O.\n", po);
+	  }
+	  if (!d) {
+	    werror("No documentation variable in documented declarations.\n");
+	    werror("decls: %O\n", decls);
+	    exit(1);
+	  }
           d->documentation = doc;
           d->appears = appears;
           d->belongs = belongs;

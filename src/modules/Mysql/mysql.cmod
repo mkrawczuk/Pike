@@ -10,12 +10,8 @@
  * Henrik Grubbström 1996-12-21
  */
 
-/* Master Pike headerfile */
-#include "module.h"
-
-#ifdef HAVE_CONFIG_H
 #include "config.h"
-#endif /* HAVE_CONFIG_H */
+#include "module.h"
 
 #ifdef HAVE_MYSQL
 
@@ -65,7 +61,6 @@
 #include "pike_compiler.h"
 #include "pike_error.h"
 #include "threads.h"
-#include "program.h"
 #include "operators.h"
 #include "builtin_functions.h"
 #include "fd_control.h"

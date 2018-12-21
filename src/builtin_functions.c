@@ -2144,19 +2144,30 @@ static void f_string_filter_non_unicode( INT32 args )
   }
 }
 
-/*! @decl string(0..255) string_to_utf8(string s)
- *! @decl string(0..255) string_to_utf8(string s, int extended)
+/*! @decl utf8_string string_to_utf8(string s)
+ *! @decl utf8_string string_to_utf8(string s, int extended)
  *!
- *!   Converts a string into an UTF-8 compliant byte-stream.
+ *!   Convert a string into a UTF-8 compliant byte-stream.
+ *!
+ *! @param s
+ *!   String to encode into UTF-8.
+ *!
+ *! @param extended
+ *!   Bitmask with extension options.
+ *!   @int
+ *!     @value 1
+ *!       Accept and encode the characters outside the valid ranges
+ *!       using the same algorithm. Such encoded characters are
+ *!       however not UTF-8 compliant.
+ *!     @value 2
+ *!       Encode characters outside the BMP with UTF-8 encoded UTF-16
+ *!       (ie split them into surrogate pairs and encode).
+ *!   @endint
  *!
  *! @note
  *!   Throws an error if characters not valid in an UTF-8 stream are
  *!   encountered. Valid characters are in the ranges
  *!   @expr{0x00000000-0x0000d7ff@} and @expr{0x0000e000-0x0010ffff@}.
- *!
- *!   If @[extended] is 1 then characters outside the valid ranges are
- *!   accepted too and encoded using the same algorithm. Such encoded
- *!   characters are however not UTF-8 compliant.
  *!
  *! @seealso
  *!   @[Charset.encoder()], @[string_to_unicode()],
@@ -2196,13 +2207,16 @@ PMOD_EXPORT void f_string_to_utf8(INT32 args)
 	if (c & ~0xffff) {
 	  /* 17bit or more. */
 	  len++;
-	  if (!extended && c > 0x10ffff)
+	  if (!(extended & 1) && c > 0x10ffff)
             bad_arg_error ("string_to_utf8", args, 1,
 			   NULL, Pike_sp - args,
 			   "Character 0x%08x at index %"PRINTPTRDIFFT"d is "
 			   "outside the allowed range.\n",
 			   c, i);
-	  if (c & ~0x1fffff) {
+	  if ((extended & 2) && (c <= 0x10ffff)) {
+	    /* Encode with a surrogate pair. */
+	    len += 2;
+	  } else if (c & ~0x1fffff) {
 	    /* 22bit or more. */
 	    len++;
 	    if (c & ~0x3ffffff) {
@@ -2216,7 +2230,7 @@ PMOD_EXPORT void f_string_to_utf8(INT32 args)
 	    }
 	  }
 	}
-	else if (!extended && c >= 0xd800 && c <= 0xdfff)
+	else if (!(extended & 1) && c >= 0xd800 && c <= 0xdfff)
           bad_arg_error ("string_to_utf8", args, 1,
 			 NULL, Pike_sp - args,
 			 "Character 0x%08x at index %"PRINTPTRDIFFT"d is "
@@ -2246,6 +2260,23 @@ PMOD_EXPORT void f_string_to_utf8(INT32 args)
       /* 16bit */
       *dst++ = 0xe0 | (c >> 12);
       *dst++ = 0x80 | ((c >> 6) & 0x3f);
+      *dst++ = 0x80 | (c & 0x3f);
+    } else if ((extended & 2) && (c <= 0x10ffff)) {
+      /* Encode with surrogates. */
+      c -= 0x10000;
+      /* 0xd800 | (c>>10)
+       * 0b1101 10cccc cccccc
+       * UTF8: 11101101 1010cccc 10cccccc
+       */
+      *dst++ = 0xed;
+      *dst++ = 0xa0 | (c >> 16);
+      *dst++ = 0x80 | ((c >> 10) & 0x3f);
+      /* 0xdc00 | (c & 0x3ff)
+       * 0b1101 11cccc cccccc
+       * UTF8: 11101101 1011cccc 10cccccc
+       */
+      *dst++ = 0xed;
+      *dst++ = 0xb0 | ((c >> 6) & 0x3f);
       *dst++ = 0x80 | (c & 0x3f);
     } else if (!(c & ~0x1fffff)) {
       /* 21bit */
@@ -2290,8 +2321,8 @@ PMOD_EXPORT void f_string_to_utf8(INT32 args)
   push_string(out);
 }
 
-/*! @decl string utf8_to_string(string(0..255) s)
- *! @decl string utf8_to_string(string(0..255) s, int extended)
+/*! @decl string utf8_to_string(utf8_string s)
+ *! @decl string utf8_to_string(utf8_string s, int extended)
  *!
  *!   Converts an UTF-8 byte-stream into a string.
  *!
@@ -2317,7 +2348,7 @@ PMOD_EXPORT void f_string_to_utf8(INT32 args)
  *!
  *! @seealso
  *!   @[Charset.encoder()], @[string_to_unicode()], @[string_to_utf8()],
- *!   @[unicode_to_string()]
+ *!   @[unicode_to_string()], @[validate_utf8()]
  */
 PMOD_EXPORT void f_utf8_to_string(INT32 args)
 {
@@ -2643,6 +2674,162 @@ PMOD_EXPORT void f_utf8_to_string(INT32 args)
   push_string(out);
 }
 
+/*! @decl string validate_utf8(utf8_string s)
+ *! @decl string validate_utf8(utf8_string s, int extended)
+ *!
+ *!   Checks whether a string is a valid UTF-8 byte-stream.
+ *!
+ *! @param s
+ *!   String of UTF-8 encoded data to validate.
+ *!
+ *! @param extended
+ *!   Bitmask with extension options.
+ *!   @int
+ *!     @value 1
+ *!       Accept the extension used by @[string_to_utf8()], including
+ *!       lone UTF-16 surrogates.
+ *!     @value 2
+ *!       Accept UTF-8 encoded UTF-16 (ie accept valid surrogate-pairs).
+ *!   @endint
+ *!
+ *! @returns
+ *!   Returns @expr{0@} (zero) if the stream is not a legal
+ *!   UTF-8 byte-stream, and @expr{1@} if it is.
+ *!
+ *! @note
+ *!   In conformance with @rfc{3629@} and Unicode 3.1 and later,
+ *!   non-shortest forms are considered invalid.
+ *!
+ *! @seealso
+ *!   @[Charset.encoder()], @[string_to_unicode()], @[string_to_utf8()],
+ *!   @[unicode_to_string()], @[utf8_to_string()]
+ */
+PMOD_EXPORT void f_validate_utf8(INT32 args)
+{
+  struct pike_string *in;
+  ptrdiff_t i;
+  INT_TYPE extended = 0;
+  INT32 min, max;
+  int ret = 1;
+  p_wchar1 expect_low_surrogate = 0;
+
+  get_all_args("validate_utf8", args, "%T.%i", &in, &extended);
+
+  if (in->size_shift) {
+    /* Wide string -- not UTF-8. */
+    pop_n_elems(args);
+    push_int(0);
+    return;
+  }
+
+  check_string_range(in, 1, &min, &max);
+
+  if (min >= 0 && max <= 0x7f) {
+    /* 7bit string -- already valid utf8. */
+    pop_n_elems(args);
+    push_int(1);
+    return;
+  }
+
+  for(i=0; ret && (i < in->len); i++) {
+    p_wchar0 c = STR0(in)[i];
+    /* NB: unsigned INT64 to handle bit 33. */
+    unsigned INT64 ch;
+    unsigned INT64 full_mask = 0x3f;
+    unsigned INT64 hi_mask = 0x3e;
+
+    /* From table 3-6 in the Unicode standard 4.0: Well-Formed UTF-8
+     * Byte Sequences
+     *
+     *  Code Points   1st Byte  2nd Byte  3rd Byte  4th Byte
+     * 000000-00007f   00-7f
+     * 000080-0007ff   c2-df     80-bf
+     * 000800-000fff    e0       a0-bf     80-bf
+     * 001000-00cfff   e1-ec     80-bf     80-bf
+     * 00d000-00d7ff    ed       80-9f     80-bf
+     * 00e000-00ffff   ee-ef     80-bf     80-bf
+     * 010000-03ffff    f0       90-bf     80-bf     80-bf
+     * 040000-0fffff   f1-f3     80-bf     80-bf     80-bf
+     * 100000-10ffff    f4       80-8f     80-bf     80-bf
+     */
+
+    if (!(c & 0x80)) {
+      if (expect_low_surrogate) ret = 0;	/* Expected low surrogate. */
+      continue;
+    }
+
+    if (!(c & 0x40)) {
+      /* Invalid continuation char. */
+      ret = 0;
+      break;
+    }
+
+    if (c == 0xff) {
+      /* Invalid UTF-8 code-point. */
+      ret = 0;
+      break;
+    }
+
+    ch = c;
+
+    while (c & 0x40) {
+      /* NB: We rely on the NUL-terminator in pike_strings. */
+      p_wchar0 cc = STR0(in)[++i];
+      if ((cc & 0xc0) != 0x80) {
+	/* Expected continuation char. */
+	ret = 0;
+	break;
+      }
+      ch = ch<<6 | (cc & 0x3f);
+      full_mask |= full_mask << 5;
+      hi_mask <<= 5;
+      c <<= 1;
+    }
+
+    ch = ch & full_mask;
+
+    if (!(ch & hi_mask) || (ch < 0x80)) {
+      /* The 5 most significant bits of ch are all zero.
+       * This means that it was a non-minimal form.
+       *
+       * Note that a special case is needed for the range 0x40..0x7f.
+       */
+      ret = 0;
+      break;
+    }
+
+    if ((ch & ~0x7ff) == 0xd800) {
+      /* Surrogate */
+      if (!(extended & 3)) {
+	ret = 0;
+	break;
+      }
+      if (!(extended & 1) && ((ch & 0x400) != expect_low_surrogate)) {
+	/* Bad surrogate pair. */
+	ret = 0;
+	break;
+      }
+      expect_low_surrogate = (ch & 0x400) ^ 0x400;
+    } else if (!(extended & 1) && expect_low_surrogate) {
+      ret = 0;
+      break;
+    } else if (ch >= 0x110000) {
+      /* Character out of range. */
+      if (!(extended & 1) || (ch >= (((unsigned INT64)1) << 32))) {
+	ret = 0;
+	break;
+      }
+    }
+  }
+
+  if (!(extended & 1) && expect_low_surrogate) {
+    ret = 0;
+  }
+
+  pop_n_elems(args);
+  push_int(ret);
+}
+
 /*! @decl string(0..255) __parse_pike_type(string(0..255) t)
  */
 static void f_parse_pike_type( INT32 args )
@@ -2845,6 +3032,42 @@ PMOD_EXPORT void f_all_constants(INT32 args)
 {
   pop_n_elems(args);
   ref_push_mapping(get_builtin_constants());
+}
+
+/*! @decl CompilerEnvironment.PikeCompiler get_active_compiler()
+ *!
+ *!   Returns the most recent of the currently active pike compilers,
+ *!   or @[UNDEFINED] if none is active.
+ *!
+ *! @note
+ *!   This function should only be used during a call of @[compile()].
+ *!
+ *! @seealso
+ *!   @[get_active_error_handler()], @[compile()],
+ *!   @[master()->get_compilation_handler()], @[CompilationHandler]
+ */
+PMOD_EXPORT void f_get_active_compiler(INT32 args)
+{
+  struct compilation *c = NULL;
+
+  /* NB: This is an efun, so we need to keep the stack clean. */
+  pop_n_elems(args);
+
+  if (compilation_program) {
+    struct pike_frame *compiler_frame = Pike_fp;
+
+    while (compiler_frame &&
+	   (compiler_frame->context->prog != compilation_program)) {
+      compiler_frame = compiler_frame->next;
+    }
+
+    if (compiler_frame && compiler_frame->current_object->prog) {
+      ref_push_object(compiler_frame->current_object);
+      return;
+    }
+  }
+
+  push_undefined();
 }
 
 /*! @decl CompilationHandler get_active_compilation_handler()
@@ -3288,6 +3511,7 @@ PMOD_EXPORT void f_crypt(INT32 args)
       f_minus(2);
     } while(Pike_sp[-1].u.string->len<8);
     pwd = Pike_sp[-1].u.string->str;
+    args++;
   }
 
   if(saltp)
@@ -5636,6 +5860,9 @@ time_t mktime_zone(struct tm *date, int other_timezone, int tz)
   time_t retval;
   int normalised_time;
 
+  if (tz <= -3600*100 || tz >= 3600*100)
+    Pike_error("Invalid timezone specified.\n");
+
   date->tm_wday = -1;		/* flag to determine failure */
 
   {
@@ -5656,8 +5883,35 @@ time_t mktime_zone(struct tm *date, int other_timezone, int tz)
   }
 
   retval = mktime(date);
-  if (date->tm_wday < 0)
+  if (date->tm_wday < 0) {
+    if (other_timezone) {
+      /* NB: This happens for times near {MIN,MAX}_TIME_T. */
+      const char *orig_tz = getenv("TZ");
+      char tzbuf[20];
+      ONERROR uwp;
+      char *tzsgn = tz < 0 ? "-" : "+";
+      if (tz < 0) tz = -tz;
+      sprintf(tzbuf, "TZ=UTC%s%02d:%02d:%02d",
+	      tzsgn,
+	      tz/3600,
+	      (tz/60)%60,
+	      tz % 60);
+      putenv(tzbuf);
+      if (!orig_tz) {
+#ifdef PUTENV_ALWAYS_REQUIRES_EQUAL
+	orig_tz = "TZ=";
+#else
+	orig_tz = "TZ";
+#endif
+      }
+      SET_ONERROR(uwp, putenv, orig_tz);
+      /* NB: No need to call tzset(); mktime() will call it. */
+      retval = mktime_zone(date, 0, 0);
+      CALL_AND_UNSET_ONERROR(uwp);
+      return retval;
+    }
     Pike_error("Time conversion unsuccessful.\n");
+  }
 
   if(other_timezone)
   {
@@ -5666,12 +5920,29 @@ time_t mktime_zone(struct tm *date, int other_timezone, int tz)
       normalised_time += 24*60*60;
     else if (normalised_time > 12*60*60)
       normalised_time -= 24*60*60;
+
 #ifdef STRUCT_TM_HAS___TM_GMTOFF
     retval += date->__tm_gmtoff;
 #elif defined(STRUCT_TM_HAS_GMTOFF)
     retval += date->tm_gmtoff;
+#elif defined(HAVE_EXTERNAL_TIMEZONE) && defined(HAVE_EXTERNAL_ALTZONE)
+    if (date->tm_isdst) {
+      retval -= altzone;
+    } else {
+      retval -= timezone;
+    }
 #else
-    normalised_time = retval - mktime(gmtime(&retval));
+    {
+      /* NB: The tm from gmtime(3F) will always have tm_isdst == 0,
+       *     but mktime() is always in the local time zone, and will
+       *     adjust it and tm_hour if the local time zone is in dst.
+       *     This causes an error of typically one hour in dst when
+       *     used without preadjustment.
+       */
+      struct tm gmt_tm = *gmtime(&retval);
+      gmt_tm.tm_isdst = date->tm_isdst;
+      normalised_time += retval - mktime(&gmt_tm);
+    }
 #endif
     retval += normalised_time + tz;
   }
@@ -6394,7 +6665,7 @@ static void f_interleave_array(INT32 args)
   int nelems = 0;
   int i;
 
-  get_all_args("interleave_array", args, "%a", &arr);
+  get_all_args(NULL, args, "%a", &arr);
 
   /* We're not interrested in any other arguments. */
   pop_n_elems(args-1);
@@ -6640,7 +6911,7 @@ static void f_longest_ordered_sequence(INT32 args)
   struct array *a = NULL;
   struct array *aa = NULL;
 
-  get_all_args("longest_ordered_sequence", args, "%a", &a);
+  get_all_args(NULL, args, "%a", &a);
 
   /* THREADS_ALLOW(); */
 
@@ -7331,7 +7602,7 @@ PMOD_EXPORT void f_permute( INT32 args )
   struct array *a;
   struct svalue *it;
 
-  get_all_args("permute", args, "%a%+", &a, &n);
+  get_all_args(NULL, args, "%a%+", &a, &n);
 
   if( a->refs>1 )
   {
@@ -7380,7 +7651,7 @@ PMOD_EXPORT void f_diff(INT32 args)
    struct array *a, *b;
    int uniq;
 
-   get_all_args("diff", args, "%a%a", &a, &b);
+   get_all_args(NULL, args, "%a%a", &a, &b);
 
    if ((a == b) || !a->size || !b->size) {
      if (!a->size && !b->size) {
@@ -7452,7 +7723,7 @@ PMOD_EXPORT void f_diff_compare_table(INT32 args)
   struct array *a;
   struct array *b;
 
-  get_all_args("diff_compare_table", args, "%a%a", &a, &b);
+  get_all_args(NULL, args, "%a%a", &a, &b);
 
   push_array(diff_compare_table(a, b, NULL));
 }
@@ -7471,7 +7742,7 @@ PMOD_EXPORT void f_diff_longest_sequence(INT32 args)
   struct array *b;
   struct array *cmptbl;
 
-  get_all_args("diff_longest_sequence", args, "%a%a", &a, &b);
+  get_all_args(NULL, args, "%a%a", &a, &b);
 
   cmptbl = diff_compare_table(a, b, NULL);
   push_array(cmptbl);
@@ -7498,7 +7769,7 @@ PMOD_EXPORT void f_diff_dyn_longest_sequence(INT32 args)
   struct array *b;
   struct array *cmptbl;
 
-  get_all_args("diff_dyn_longest_sequence", args, "%a%a", &a, &b);
+  get_all_args(NULL, args, "%a%a", &a, &b);
 
   cmptbl=diff_compare_table(a, b, NULL);
   push_array(cmptbl);
@@ -7642,7 +7913,6 @@ PMOD_EXPORT void f__memory_usage(INT32 args)
   COUNT(destruct_called_mark);
   COUNT(gc_rec_frame);
   COUNT(mapping);
-  COUNT(marker);
   COUNT(mc_marker);
   COUNT(multiset);
   COUNT(node_s);
@@ -8257,7 +8527,7 @@ PMOD_EXPORT void f_uniq_array(INT32 args)
   struct mapping *m;
   int i, j=0,size=0;
 
-  get_all_args("uniq", args, "%a", &a);
+  get_all_args(NULL, args, "%a", &a);
   if( !a->size )
   {
     push_empty_array();
@@ -8302,7 +8572,7 @@ PMOD_EXPORT void f_uniq_array(INT32 args)
 PMOD_EXPORT void f_splice(INT32 args)
 {
   struct array *out;
-  INT32 size=0x7fffffff;
+  INT32 size=MAX_INT32;
   INT32 i,j,k;
 
   for(i=0;i<args;i++)
@@ -8351,7 +8621,7 @@ PMOD_EXPORT void f_everynth(INT32 args)
   TYPE_FIELD types;
   INT32 size=0;
 
-  check_all_args("everynth", args,
+  check_all_args(NULL, args,
 		 BIT_ARRAY, BIT_INT | BIT_VOID, BIT_INT | BIT_VOID , 0);
 
   switch(args)
@@ -9251,10 +9521,10 @@ PMOD_EXPORT void f_program_identifier_defined(INT32 args)
   struct pike_string *file = NULL;
 
   if( !(p = program_from_svalue(Pike_sp-args)) )
-      Pike_error("Illegal argument 1 to defined(program,string)\n");
+    SIMPLE_ARG_TYPE_ERROR("program_identifier_defined", 1, "program");
 
   if( TYPEOF(Pike_sp[1-args]) != PIKE_T_STRING )
-      Pike_error("Illegal argument 2 to defined(program,string)\n");
+    SIMPLE_ARG_TYPE_ERROR("program_identifier_defined", 2, "string");
   else
       ident = Pike_sp[-args+1].u.string;
 
@@ -9319,7 +9589,7 @@ PMOD_EXPORT void f_inherit_list(INT32 args)
   struct object *par;
   int parid,e,q=0;
 
-  get_all_args("inherit_list",args,"%*",&arg);
+  get_all_args(NULL, args, "%*", &arg);
   if(TYPEOF(Pike_sp[-args]) == T_OBJECT)
     f_object_program(1);
 
@@ -9404,7 +9674,7 @@ PMOD_EXPORT void f_inherit_list(INT32 args)
  */
 PMOD_EXPORT void f_function_defined(INT32 args)
 {
-  check_all_args("Function.defined",args,BIT_FUNCTION, 0);
+  check_all_args(NULL, args, BIT_FUNCTION, 0);
 
   if(SUBTYPEOF(Pike_sp[-args]) != FUNCTION_BUILTIN &&
      Pike_sp[-args].u.object->prog)
@@ -9536,6 +9806,10 @@ void init_builtin_efuns(void)
   /* function(:mapping(string:mixed)) */
   ADD_EFUN("all_constants",f_all_constants,
 	   tFunc(tNone,tMap(tStr,tMix)),OPT_EXTERNAL_DEPEND);
+
+  /* function(:object) */
+  ADD_EFUN("get_active_compiler", f_get_active_compiler,
+	   tFunc(tNone, tObj), OPT_EXTERNAL_DEPEND);
 
   /* function(:object) */
   ADD_EFUN("get_active_compilation_handler",
@@ -9825,16 +10099,20 @@ void init_builtin_efuns(void)
   ADD_EFUN("unicode_to_string", f_unicode_to_string,
 	   tFunc(tStr8 tOr(tInt02,tVoid),tStr), OPT_TRY_OPTIMIZE);
 
-  /* function(string,int|void:string(0..255)) */
+  /* function(string,int|void:utf8_string) */
   ADD_EFUN("string_to_utf8", f_string_to_utf8,
-	   tFunc(tStr tOr(tInt,tVoid),tStr8), OPT_TRY_OPTIMIZE);
+	   tFunc(tStr tOr(tInt,tVoid),tUtf8Str), OPT_TRY_OPTIMIZE);
 
   ADD_EFUN("string_filter_non_unicode", f_string_filter_non_unicode,
 	   tFunc(tStr tOr(tInt,tVoid),tStr8), OPT_TRY_OPTIMIZE);
 
-  /* function(string(0..255),int|void:string) */
+  /* function(utf8_string,int|void:string) */
   ADD_EFUN("utf8_to_string", f_utf8_to_string,
-	   tFunc(tStr8 tOr(tInt,tVoid),tStr), OPT_TRY_OPTIMIZE);
+	   tFunc(tUtf8Str tOr(tInt,tVoid),tStr), OPT_TRY_OPTIMIZE);
+
+  /* function(string(8bit),int|void:int(0..1)) */
+  ADD_EFUN("validate_utf8", f_validate_utf8,
+	   tFunc(tStr8 tOr(tInt,tVoid),tInt01), OPT_TRY_OPTIMIZE);
 
 
   ADD_EFUN("__parse_pike_type", f_parse_pike_type,

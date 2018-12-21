@@ -4,18 +4,13 @@
 || for more information.
 */
 
-#include "global.h"
 #include "module.h"
 #include "pike_compiler.h"
 #include "pike_macros.h"
 #include "pike_error.h"
 #include "builtin_functions.h"
 #include "main.h"
-#include "svalue.h"
 #include "interpret.h"
-#include "stralloc.h"
-#include "object.h"
-#include "mapping.h"
 #include "program_id.h"
 #include "lex.h"
 #include "cpp.h"
@@ -25,7 +20,6 @@
 #include "signal_handler.h"
 #include "dynamic_load.h"
 #include "gc.h"
-#include "multiset.h"
 #include "pike_types.h"
 #include "constants.h"
 #include "bignum.h"
@@ -198,15 +192,15 @@ static void exit_builtin_modules(void)
 	      is_static = 1;						\
 	  /* Note: m->xrefs is always zero here since the mark pass	\
 	   * isn't run in gc_destruct_everything mode. */		\
-	  if (x->refs != m->refs + is_static) {				\
+	  if (x->refs != m->gc_refs + is_static) {		        \
 	    if (!leak_found) {						\
 	      fputs ("Leak(s) found at exit:\n", stderr);		\
 	      leak_found = 1;						\
 	    }								\
 	    fprintf (stderr, NAME " at %p got %d unaccounted refs "	\
 		     "(and %d accounted): ",				\
-		     x, x->refs - (m->refs + is_static),		\
-		     m->refs + is_static);				\
+		     x, x->refs - (m->gc_refs + is_static),		\
+		     m->gc_refs + is_static);				\
 	    safe_print_short_svalue (stderr, (union anything *) &x, T_TYPE); \
 	    {PRINT_EXTRA;}						\
 	    fputc ('\n', stderr);					\
@@ -215,7 +209,7 @@ static void exit_builtin_modules(void)
 	      debug_malloc_dump_references (x, 2, 1, 0);		\
 	      fputc ('\n', stderr);					\
 	    );								\
-	    DO_IF_DEBUG (m->flags |= GC_CLEANUP_LEAKED);		\
+	    DO_IF_DEBUG (m->gc_flags |= GC_CLEANUP_LEAKED);		\
 	  }								\
 	}								\
       }									\
@@ -302,7 +296,7 @@ static void exit_builtin_modules(void)
 	    if (x == statics[i])					\
 	      is_static = 1;						\
 	  refs = x->refs;						\
-	  while (refs > m->refs + is_static) {				\
+	  while (refs > m->gc_refs + is_static) {		        \
 	    PIKE_CONCAT(free_, TYPE) (x);				\
 	    refs--;							\
 	  }								\

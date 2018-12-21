@@ -31,6 +31,8 @@
 
 #include "bitvector.h"
 #include "pike_macros.h"
+#include "stralloc.h"
+#include "siphash24.h"
 
 #define ROTL(x,b) (UINT64)( ((x) << (b)) | ( (x) >> (64 - (b))) )
 
@@ -53,7 +55,7 @@ ATTRIBUTE((fastcall))
 #endif
 ATTRIBUTE((hot))
 PMOD_EXPORT UINT64 low_hashmem_siphash24( const void *s, size_t len, size_t nbytes,
-                                                  UINT64 key )
+					  UINT64 key )
 {
   const unsigned char * in = (const unsigned char*)s;
   unsigned long long inlen = MINIMUM(len, nbytes);

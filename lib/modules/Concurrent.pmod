@@ -579,7 +579,7 @@ class Future
   }
 }
 
-class AggregateState
+protected class AggregateState
 {
   private Promise promise;
   private int(0..) promises;
@@ -1059,6 +1059,9 @@ variant inline Future race(Future ... futures)
 //!   @[all()], @[Promise.depend()]
 variant Future results(array(Future) futures)
 {
+  if(!sizeof(futures))
+    return resolve(({}));
+
   return Promise()->depend(futures)->future();
 }
 inline variant Future results(Future ... futures)

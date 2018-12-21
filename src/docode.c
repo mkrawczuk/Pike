@@ -2762,6 +2762,7 @@ static int do_docode2(node *n, int flags)
     }
 
   case F_VAL_LVAL:
+  case F_FOREACH_VAL_LVAL:
     ret = do_docode(CAR(n),flags);
     return ret + do_docode(CDR(n), flags | DO_LVALUE);
 
@@ -2781,6 +2782,19 @@ static int do_docode2(node *n, int flags)
     {
         yyerror("[*] not supported here.\n");
         emit0(F_CONST0);
+    }
+    return 1;
+
+  case F_TYPEOF:
+    {
+      struct svalue s;
+      /* NB: This should only be reachable via eval_low().
+       *     Typically treeopt will get rid of this node.
+       */
+      SET_SVAL(s, PIKE_T_TYPE, 0, type,
+	       CAR(n)->type?CAR(n)->type:mixed_type_string);
+      tmp1 = store_constant(&s, 0, NULL);
+      emit1(F_CONSTANT, (INT32)tmp1);
     }
     return 1;
 

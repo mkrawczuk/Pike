@@ -77,6 +77,12 @@ PMOD_EXPORT int check_args(int args, ...)
   return tmp.argno+1;
 }
 
+static const char* get_fname(const char *fname)
+{
+  if (fname) return fname;
+  return (Pike_fp->context->prog->identifiers + Pike_fp->fun)->name->str;
+}
+
 /* This function generates errors if any of the args first arguments
  * is not OK.
  */
@@ -93,10 +99,10 @@ PMOD_EXPORT void check_all_args(const char *fnname, int args, ... )
   {
   case ERR_NONE: return;
   case ERR_TOO_FEW:
-    new_error(fnname, "Too few arguments.\n", Pike_sp, args);
+    new_error(get_fname(fnname), "Too few arguments.\n", Pike_sp, args);
     break;
   case ERR_TOO_MANY:
-    new_error(fnname, "Too many arguments.\n", Pike_sp, args);
+    new_error(get_fname(fnname), "Too many arguments.\n", Pike_sp, args);
     break;
 
   case ERR_BAD_ARG:
@@ -121,7 +127,7 @@ PMOD_EXPORT void check_all_args(const char *fnname, int args, ... )
 
     Pike_error("Bad argument %d to %s(), (expecting %s, got %s)\n",
 	  tmp.argno+1,
-	  fnname,
+          get_fname(fnname),
 	  buf,
 	  get_name_of_type(tmp.got));
     break;
@@ -523,6 +529,7 @@ PMOD_EXPORT void get_all_args(const char *fname, INT32 args,
     case ARGS_LONG:
       break;
     case ARGS_NUL_IN_STRING:
+      fname = get_fname(fname);
       bad_arg_error(fname, args, ret+1,	"string(1..255)",
 	Pike_sp+ret-args,
 	"Bad argument %d to %s(). NUL in string.\n",
@@ -530,7 +537,7 @@ PMOD_EXPORT void get_all_args(const char *fname, INT32 args,
       UNREACHABLE();
 
     case ARGS_SUBTYPED_OBJECT:
-      bad_arg_error(fname, args, ret+1, "object",
+      bad_arg_error(get_fname(fname), args, ret+1, "object",
 		    Pike_sp+ret-args,
 		    "Subtyped objects are not supported.\n");
       UNREACHABLE();
@@ -576,6 +583,7 @@ PMOD_EXPORT void get_all_args(const char *fname, INT32 args,
 #endif
       }
 
+      fname = get_fname(fname);
       if (info != ARGS_SHORT) {
         bad_arg_error(fname, args, ret+1, expected_type,
 	  Pike_sp+ret-args,

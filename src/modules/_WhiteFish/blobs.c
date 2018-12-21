@@ -1,6 +1,11 @@
+/*
+|| This file is part of Pike. For copyright information see COPYRIGHT.
+|| Pike is distributed under GPL, LGPL and MPL. See the file COPYING
+|| for more information.
+*/
+
 #include "global.h"
 #include "stralloc.h"
-#include "global.h"
 #include "pike_macros.h"
 #include "interpret.h"
 #include "program.h"
@@ -109,7 +114,7 @@ static void f_blobs_add_words( INT32 args )
   int i;
   struct blobs *blbl = THIS;
 
-  get_all_args( "add_words", args, "%d%a%d",
+  get_all_args( NULL, args, "%d%a%d",
 		&docid, &words, &field_id);
 
   for( i = 0; i<words->size; i++ )

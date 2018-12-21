@@ -1056,7 +1056,6 @@ PMOD_EXPORT void dump_backlog(void)
     );                                                                 \
     debug_malloc_touch (cc);                                           \
     UNSETJMP (cc->recovery);                                           \
-    frame_set_expendible(Pike_fp, cc->save_expendible);                \
     Pike_interpreter.catch_ctx = cc->prev;                             \
     really_free_catch_context (cc);                                    \
   } while (0)
@@ -1077,7 +1076,6 @@ PMOD_EXPORT void dump_backlog(void)
     );                                                                 \
     debug_malloc_touch (cc);                                           \
     UNSETJMP (cc->recovery);                                           \
-    frame_set_expendible(Pike_fp, cc->save_expendible);                \
     Pike_interpreter.catch_ctx = cc->prev;                             \
     really_free_catch_context (cc);                                    \
   } while (0)
@@ -1205,7 +1203,6 @@ PIKE_OPCODE_T *inter_return_opcode_F_CATCH(PIKE_OPCODE_T *addr)
 #else
       init_recovery (&new_catch_ctx->recovery, 0);
 #endif
-    new_catch_ctx->save_expendible = frame_get_expendible(Pike_fp);
     new_catch_ctx->continue_reladdr = (INT32)get_unaligned32(addr)
       /* We need to run the entry prologue... */
       - ENTRY_PROLOGUE_SIZE;
@@ -1217,8 +1214,6 @@ PIKE_OPCODE_T *inter_return_opcode_F_CATCH(PIKE_OPCODE_T *addr)
 	TRACE((3,"-   Pushed catch context %p\n", new_catch_ctx));
       });
   }
-
-  Pike_fp->expendible_offset = Pike_fp->num_locals;
 
   /* Need to adjust next_addr by sizeof(INT32) to skip past the jump
    * address to the continue position after the catch block. */
@@ -1282,7 +1277,6 @@ PIKE_OPCODE_T *inter_return_opcode_F_CATCH(PIKE_OPCODE_T *addr)
 
 	debug_malloc_touch_named (cc, "(3)");
 	UNSETJMP (cc->recovery);
-	frame_set_expendible(Pike_fp, cc->save_expendible);
 	move_svalue (Pike_sp++, &throw_value);
 	mark_free_svalue (&throw_value);
 	low_destruct_objects_to_destruct();
@@ -1337,7 +1331,6 @@ PIKE_OPCODE_T *setup_catch_context(PIKE_OPCODE_T *addr)
 #else
       init_recovery (&new_catch_ctx->recovery, 0);
 #endif
-    new_catch_ctx->save_expendible = frame_get_expendible(Pike_fp);
 
     /* Note: no prologue. */
     new_catch_ctx->continue_reladdr = (INT32)get_unaligned32(addr);
@@ -1349,8 +1342,6 @@ PIKE_OPCODE_T *setup_catch_context(PIKE_OPCODE_T *addr)
 	TRACE((3,"-   Pushed catch context %p\n", new_catch_ctx));
       });
   }
-
-  Pike_fp->expendible_offset = Pike_fp->num_locals;
 
   /* Need to adjust next_addr by sizeof(INT32) to skip past the jump
    * address to the continue position after the catch block. */
@@ -1375,7 +1366,6 @@ PIKE_OPCODE_T *handle_caught_exception(void)
 
   debug_malloc_touch_named (cc, "(3)");
   UNSETJMP (cc->recovery);
-  frame_set_expendible(Pike_fp, cc->save_expendible);
   move_svalue (Pike_sp++, &throw_value);
   mark_free_svalue (&throw_value);
   low_destruct_objects_to_destruct();
@@ -2036,7 +2026,6 @@ PMOD_EXPORT void really_free_pike_frame( struct pike_frame *X )
     X->scope=0;
     X->current_object=0;
     X->flags=0;
-    X->expendible_offset=0;
     X->locals=0;
   );
   X->next = free_pike_frame;
@@ -2054,6 +2043,7 @@ struct pike_frame *alloc_pike_frame(void)
       PIKE_MEM_RW_RANGE(&res->next, sizeof(void*));
       free_pike_frame = res->next;
       PIKE_MEM_WO_RANGE(&res->next, sizeof(void*));
+      gc_init_marker(res);
       res->refs=0;
       add_ref(res);	/* For DMALLOC... */
       res->flags=0;
@@ -2084,6 +2074,61 @@ struct pike_frame *alloc_pike_frame(void)
       num_pike_frames+=FRAMES_PER_CHUNK;
     }
     return alloc_pike_frame();
+}
+
+void LOW_POP_PIKE_FRAME_slow_path(struct pike_frame *frame)
+{
+  debug_malloc_touch(frame);
+
+  if (frame->flags & PIKE_FRAME_SAVE_LOCALS) {
+    int num_new_locals = 0;
+    int num_locals = frame->num_locals;
+    int i;
+
+    /* find the highest set bit */
+    for (i = num_locals - 1; i >= 0; i--) {
+      unsigned INT16 bitmask = frame->save_locals_bitmask[i / 16];
+
+      if (bitmask & (1 << (i % 16))) {
+        num_new_locals = i + 1;
+        break;
+      }
+    }
+
+    if (num_new_locals)
+    {
+      struct svalue *s = xcalloc(sizeof(struct svalue), num_new_locals);
+      struct svalue *locals = frame->locals;
+      unsigned INT16 bitmask = 0;
+
+      for (i = 0; i < num_new_locals; i++) {
+        unsigned INT16 bitmask = frame->save_locals_bitmask[i / 16];
+
+        if (bitmask & (1 << (i % 16))) {
+          assign_svalue_no_free(s + i, locals + i);
+        }
+#ifdef PIKE_DEBUG
+        else
+          mark_free_svalue(s + i);
+#endif
+      }
+
+      frame->locals = s;
+      frame->flags |= PIKE_FRAME_MALLOCED_LOCALS;
+    } else {
+      frame->locals = NULL;
+    }
+
+    frame->flags &= ~PIKE_FRAME_SAVE_LOCALS;
+
+    free(frame->save_locals_bitmask);
+
+    frame->num_locals = num_new_locals;
+  } else {
+    frame->locals = NULL;
+  }
+
+  frame->next=0;
 }
 
 void count_memory_in_pike_frames(size_t *num, size_t *size )
@@ -2182,7 +2227,6 @@ void *lower_mega_apply( INT32 args, struct object *o, ptrdiff_t fun )
           new_frame->locals = save_sp;
           new_frame->args = args;
           new_frame->save_sp_offset = 0;
-          new_frame->expendible_offset = 0;
 
 #ifdef PIKE_DEBUG
           if (Pike_in_gc > GC_PASS_PREPARE && Pike_in_gc < GC_PASS_FREE)
@@ -2945,7 +2989,6 @@ int apply_low_safe_and_stupid(struct object *o, INT32 offset)
   add_ref(new_frame->current_program = prog);
   new_frame->context = prog->inherits;
   new_frame->locals = Pike_sp;
-  new_frame->expendible_offset=0;
   new_frame->args = 0;
   new_frame->num_args=0;
   new_frame->num_locals=0;
@@ -3256,6 +3299,33 @@ PMOD_EXPORT void apply_external(int depth, int fun, INT32 args)
   } else {
     PIKE_ERROR("destructed object", "Apply on parent of destructed object.\n",
 	       Pike_sp, args);
+  }
+}
+
+/* mode=1 : Exception on lookup and on execution
+ * mode=2 : Exception on lookup but not execution
+ * mode=3 : No exceptions
+ */
+PMOD_EXPORT void apply_master(const char* fun, INT32 args, int mode)
+{
+  static int id_=-1;
+  struct object *master_ob=master();
+  if(master_ob->prog->id != 0)
+    id_=find_identifier(fun, master_ob->prog);
+
+  if (id_ >= 0) {
+    if( mode==1 )
+      apply_low(master_ob, id_, args);
+    else
+      safe_apply_low2(master_ob, id_, args, fun);
+  } else {
+    if( mode==3 )
+    {
+      pop_n_elems(args);
+      push_undefined();
+    }
+    else
+      Pike_error("Cannot call undefined function \"%s\" in master.\n", fun);
   }
 }
 

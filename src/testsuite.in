@@ -7615,6 +7615,33 @@ test_program([[
   }
 ]])
 
+// Pike.identify_cycle
+test_any_equal([[
+  class Foo { Foo next; int counter; };
+  array(Foo) foos = allocate(10, Foo)();
+  for (int i = 0; i < 10; i++) {
+    foos[i]->next = foos[(i+1)%10];
+    foos[i]->counter = i;
+  }
+  return Pike.identify_cycle(foos[0])->counter;
+]], ({ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 }))
+test_any([[
+  // PIKE-106: Mutex not unlocked properly on error in identify_cycle().
+  class Foo {
+    int cnt;
+    int __hash() { return 0; }
+    int `==(mixed x) { if (!cnt++) error("Comparison failure.\n"); }
+  };
+  catch {
+    // This triggered an error.
+    Pike.identify_cycle(allocate(2, Foo)());
+  };
+  catch {
+    // This hanged due to the mc_mutex not having been released.
+    Pike.identify_cycle(allocate(2, Foo)());
+  };
+]], 0)
+
 // Numerical limits.
 test_true([[Int.NATIVE_MIN <= -2147483648]])
 test_true([[Int.NATIVE_MAX >= 2147483647]])
@@ -8094,7 +8121,7 @@ test_true(intp(signum("SIGKILL")))
 
 // kill, signal, getpid
 test_true(intp(getpid()))
-cond([[all_constants()->kill && (cpp("__NT__")/"\n")[1]=="__NT__" ]],
+cond([[all_constants()->kill && (cpp("__NT__")/"\n")[-1]=="__NT__" ]],
 [[
   test_do(signal(signum("SIGFPE"),lambda() { add_constant("AFJLLAF",17); }))
   test_do(kill(getpid(),signum("SIGFPE")))
@@ -9190,6 +9217,14 @@ test_eval_error([[(int)class { mixed cast() { return UNDEFINED; } }();]])
 test_eval_error([[(string)class { mixed cast() { return UNDEFINED; } }();]])
 test_eval_error([[(mapping)class { mixed cast() { return UNDEFINED; } }();]])
 
+test_any([[
+  // Cast to subtyped object.
+  class A(int val) {
+    int next() { return ++val; }
+  }
+  return ((object(A))17)->next();
+]], 18)
+
 // testing @
 test_equal(({1,2,3}),lambda(mixed ... x) { return x; }(@a()))
 test_equal("foo"/"",lambda(mixed ... x) { return x; }(@a()))
@@ -9843,15 +9878,17 @@ ifefun(_verify_internals,
 test_compile_any([[import Stdio.Readline; mapping x=([]);]])
 
 // testing preprocessor
-test_eq([[cpp("#define FOO(X,Y) (X) (Y)\nFOO( (A),(B) )")]],"#line 1 \"-\"\n\n( (A) ) ( (B) )")
-test_eq([[cpp("#define FOO(X)\nFOO BAR")]],"#line 1 \"-\"\n\nFOO BAR")
-test_eq([[cpp("#define F 'F'\nF")]],"#line 1 \"-\"\n\n'F'")
-test_eq([[cpp("#define MAX(X,Y) ((X)>(Y)?(X):(Y))\n#define MAX3(X,Y,Z) MAX(MAX(X,Y),Z)\nMAX3(1,2,3)")]],"#line 1 \"-\"\n\n\n(( (( 1 )>( 2 )?( 1 ):( 2 )) )>( 3 )?( (( 1 )>( 2 )?( 1 ):( 2 )) ):( 3 ))")
-test_eq([[cpp("foo\xfeff""bar \xfeff gazonk")]],[[cpp("foobar  gazonk")]])
+test_eq([[cpp("#define FOO(X,Y) (X) (Y)\nFOO( (A),(B) )")]],"\n( (A) ) ( (B) )")
+test_eq([[cpp("#define FOO(X)\nFOO BAR")]],"\nFOO BAR")
+test_eq([[cpp("#define F 'F'\nF")]],"\n'F'")
+test_eq([[cpp("#define MAX(X,Y) ((X)>(Y)?(X):(Y))\n#define MAX3(X,Y,Z) MAX(MAX(X,Y),Z)\nMAX3(1,2,3)")]],"\n\n(( (( 1 )>( 2 )?( 1 ):( 2 )) )>( 3 )?( (( 1 )>( 2 )?( 1 ):( 2 )) ):( 3 ))")
+test_eq([[cpp("\t  foo\xfeff""bar \xfeff gazonk")]],
+        [[cpp("\t  foobar  gazonk")]])
+test_eq([[cpp("\t  foobar  gazonk\n")]], "\t  foobar  gazonk\n")
 test_eq([[cpp("#define A(X) #X\n#define B(Y) A(Y)\nB(foo)")]],
-	"#line 1 \"-\"\n\n\n \"foo\" ")
-test_eq([[cpp("#define FOO(X) X\nFOO(\"\\\n\")\n")]], "#line 1 \"-\"\n\n\n \"\" \n");
-test_eq([[cpp("#define FOO(X) X\r\nFOO(\"\\\r\n\")\r\n")]], "#line 1 \"-\"\n\n\n \"\"   \n" /* Note: Added extra spaces for \r. */);
+	"\n\n \"foo\" ")
+test_eq([[cpp("#define FOO(X) X\nFOO(\"\\\n\")\n")]], "\n\n \"\" \n");
+test_eq([[cpp("#define FOO(X) X\r\nFOO(\"\\\r\n\")\r\n")]], "\n\n \"\" \n");
 test_equal([[compile_string("#define FOO(X) X\nstring s=FOO(\"\\\n\\\n\");\nmixed f() {return ({__LINE__, backtrace()[-1][1]});}\n")()->f()]], ({5, 5}));
 test_equal([[compile_string("#define FOO(X) X\nstring s=FOO(#\"\n\n\");\nmixed f() {return ({__LINE__, backtrace()[-1][1]});}\n")()->f()]], ({5, 5}));
 test_equal([[
@@ -9867,14 +9904,14 @@ test_equal([[
 		 "constant val = TOSTR2(FOO);\n")()->val;
 ]], "")
 test_eq([[cpp("foo _Pragma(\"strict_types \\\\back \\\"str\\\"\") bar")]],
-  "#line 1 \"-\"\nfoo \n#pragma strict_types \\back \"str\"\n#line 1 \"-\"\n bar")
+  "foo \n#pragma strict_types \\back \"str\"\n#line 1 \"-\"\n bar")
 test_equal([[
   compile_string(Charset.encoder("ebcdic-us")->
     feed("#charset ebcdic-us\n"
 	 "constant val = \"abc\";\n")->drain())()->val;
 ]], "abc")
-test_eq([[cpp("\\\n")]], "#line 1 \"-\"\n\n")
-test_eq([[cpp("#if 1\\\n-1\nfoo\n#endif\n")]], "#line 1 \"-\"\n\n\n\n\n")
+test_eq([[cpp("\\\n")]], "\n")
+test_eq([[cpp("#if 1\\\n-1\nfoo\n#endif\n")]], "\n\n\n\n")
 test_any([[
   #define TOSTR(X)	#X
   return TOSTR(FOO  "String with \\ and \" and  space"  BAR);
@@ -10058,7 +10095,7 @@ test_do([[
 test_any([[
   class handler {mapping get_predefines() {return (["x": "1", "y": "", "z": 0]);}};
   return cpp ("x y z p", "-", 0, handler());
-]], "#line 1 \"-\"\n1   p");
+]], "1   p");
 test_eval_error([[
   class handler {mixed get_predefines() {return (<"x">);}};
   cpp ("x y z", "-", 0, handler());
@@ -11385,6 +11422,9 @@ test_eq([[combine_path(".", "bar")]],"bar")
 test_eq([[combine_path("./", "bar")]],"bar")
 test_eq([[combine_path(".", "../bar")]],"../bar")
 test_eq([[combine_path("./", "../bar")]],"../bar")
+test_eq([[combine_path("./bar")]],"bar")
+test_eq([[combine_path("./bar")]],"bar")
+test_eq([[combine_path("./../bar")]],"../bar")
 
 // - combine_path_nt
 test_eq([[combine_path_nt("/","/fo\1111/bar/gazonk/../../")]],"/fo\1111/")
@@ -11991,11 +12031,31 @@ test_equal(mkmultiset(indices(class{constant a="a"; constant b="b";}())),
 // - load_module
 
 // - localtime
-ifefun(localtime,[[
+cond([[all_constants()->localtime && (Pike.get_runtime_info()->time_size > 32)]],
+[[
   test_true(mappingp(localtime(0)))
   test_eq(localtime(1<<31)->year, 138)
   test_eq(localtime(1<<32)->year, 206)
   test_eq(localtime(1<<33)->year, 342)
+  test_equal(sort(indices(localtime(0))),({
+     "hour",
+     "isdst",
+     "mday",
+     "min",
+     "mon",
+     "sec",
+     "timezone",
+     "wday",
+     "yday",
+     "year"
+  }))
+  test_do([[int t = -1; catch(localtime(t));]])
+]])
+cond([[all_constants()->localtime && (Pike.get_runtime_info()->time_size == 32)]],
+[[
+  test_true(mappingp(localtime(0)))
+  test_eval_error([[return localtime(1<<31)->year]])
+  test_eq(localtime((1<<31)-1)->year, 138)
   test_equal(sort(indices(localtime(0))),({
      "hour",
      "isdst",
@@ -12207,14 +12267,32 @@ ifefun(mktime,
 		       1230764900,1356995300,1483225700,1609456100,1735686500,
                        1861916900,1988147300,2114377700,1500033813,
                        0,1,2,(1<<31)-1,
-                       -1<<33,-1<<32,(-1<<31)-1,-1<<31,(-1<<31)+1,-2,-1,
-                       1<<31,(1<<31)+1,1<<32,1<<33,
+                       -1<<31,(-1<<31)+1,-2,-1,
+		      }),int t) {
+	       if (mixed err = catch {
+	           int res = mktime (gmtime (t));
+	           if(res!=t) return ({t, res});
+	         }) {
+	         log_msg("Failure for %d (0x%08x).\n", t, t & 0xffffffff);
+	         throw(err);
+	       }
+	     }
+	     return 0;]], 0)
+]])
+
+cond([[all_constants()->mktime && (Pike.get_runtime_info()->time_size > 32)]],
+[[
+  test_any([[foreach(({-1<<33,-1<<32,
+                       1<<31,(1<<31)+1,1<<32,1<<33,(-1<<31)-1,
 		      }),int t) {
 	       int res = mktime (gmtime (t));
 	       if(res!=t) return ({t, res});
 	     }
 	     return 0;]], 0)
+]])
 
+ifefun(mktime,
+[[
   test_eq(mktime (0, 0, 0, -200, -6, 101, 0, 0), 945043200);
   test_eq(mktime (0, 0, 0, -1, 2, 107, 0, 0), 1172534400);
   test_eq(mktime (0, 0, 0, 200, 1, 107, 0, 0), 1187481600);
@@ -12722,6 +12800,8 @@ test_eval_error(return unicode_to_string(" "))
 test_eq(string_to_utf8("foo"), "foo")
 test_eq(string_to_utf8("blä"), "bl\303\244")
 test_eq(string_to_utf8("\77077"), "\347\270\277")
+test_eq(string_to_utf8("\U0010ffff\U00100000\U00010000"), "\364\217\277\277\364\200\200\200\360\220\200\200")
+test_eq(string_to_utf8("\U0010ffff\U00100000\U00010000", 2), "\355\257\277\355\277\277\355\257\200\355\260\200\355\240\200\355\260\200")
 test_eq(string_to_utf8("\7077077", 1), "\367\207\270\277")
 test_eq(string_to_utf8("\77077077", 1), "\370\277\207\270\277")
 test_eq(string_to_utf8("\7077077077", 1), "\374\270\277\207\270\277")
@@ -12737,6 +12817,9 @@ test_eq(utf8_to_string("\376\203\270\277\207\270\277", 1), "\37077077077")
 test_eq(utf8_to_string("\374\270\277\207\270\277", 1), "\7077077077")
 test_eq(utf8_to_string("\370\277\207\270\277", 1), "\77077077")
 test_eq(utf8_to_string("\367\207\270\277", 1), "\7077077")
+test_eval_error(return utf8_to_string("\355\257\277\355\277\277\355\257\200\355\260\200\355\240\200\355\260\200"))
+test_eq(utf8_to_string("\355\257\277\355\277\277\355\257\200\355\260\200\355\240\200\355\260\200", 2), "\U0010ffff\U00100000\U00010000")
+test_eq(utf8_to_string("\364\217\277\277\364\200\200\200\360\220\200\200"), "\U0010ffff\U00100000\U00010000")
 test_eq(utf8_to_string("\347\270\277"), "\77077")
 test_eq(utf8_to_string("bl\303\244"), "blä")
 test_eq(utf8_to_string("foo"), "foo")
@@ -12805,6 +12888,83 @@ test_eq(utf8_to_string ("\u00fc\u0084\u0080\u0080\u0080\u0080", 1), "\U04000000"
 test_eval_error(return utf8_to_string ("\u00fe\u0080\u0080\u0080\u0080\u0080\u0080", 1))
 test_eval_error(return utf8_to_string ("\u00fe\u0081\u00bf\u00bf\u00bf\u00bf\u00bf", 1))
 test_eq(utf8_to_string ("\u00fe\u0082\u0080\u0080\u0080\u0080\u0080", 1), "\U80000000")
+
+// validate_utf8
+test_true(validate_utf8("foo"))
+test_false(validate_utf8("blä"))
+test_true(validate_utf8("bl\303\244"))
+test_false(validate_utf8([string(8bit)](mixed)"\77077"))
+test_true(validate_utf8("\347\270\277"))
+test_false(validate_utf8([string(8bit)](mixed)"\7077077"))
+test_false(validate_utf8("\367\207\270\277"))
+test_true(validate_utf8("\367\207\270\277", 1))
+test_false(validate_utf8("\370\277\207\270\277"))
+test_true(validate_utf8("\370\277\207\270\277", 1))
+test_false(validate_utf8([string(8bit)](mixed)"\7077077077"))
+test_false(validate_utf8("\374\270\277\207\270\277"))
+test_true(validate_utf8("\374\270\277\207\270\277", 1))
+
+test_false(validate_utf8("\376\203\270\277\207\270\277"))
+test_true(validate_utf8("\376\203\270\277\207\270\277", 1))
+
+test_false(validate_utf8("\277"));
+test_false(validate_utf8("\377"));
+test_false(validate_utf8("\376\203\270\277\207\270", 1));
+test_false(validate_utf8("\374\270\277\207\270"));
+test_false(validate_utf8("\370\277\207\270"));
+test_false(validate_utf8("\367\207\270"));
+test_false(validate_utf8("\347\270"));
+test_false(validate_utf8("\303"));
+test_false(validate_utf8("\376\203\270\277\207\270a"));
+test_false(validate_utf8("\374\270\277\207\270a"));
+test_false(validate_utf8("\370\277\207\270a"));
+test_false(validate_utf8("\367\207\270a"));
+test_false(validate_utf8("\347\270a"));
+test_false(validate_utf8("\303a"));
+
+// Invalid ranges
+test_true(validate_utf8("\u00ed\u009f\u00bf"))
+test_false(validate_utf8("\u00ed\u00a0\u0080"))
+test_true(validate_utf8("\u00ed\u00a0\u0080", 1))
+test_false(validate_utf8("\u00ed\u00a0\u0080", 2))
+test_false(validate_utf8("\u00ed\u00bf\u00bf"))
+test_true(validate_utf8("\u00ed\u00bf\u00bf", 1))
+test_false(validate_utf8("\u00ed\u00bf\u00bf", 2))
+test_true(validate_utf8("\u00ed\u00a0\u0080\u00ed\u00bf\u00bf", 2))
+
+test_true(validate_utf8("\u00ee\u0080\u0080"))
+test_true(validate_utf8("\u00f4\u008f\u00bf\u00bf"))
+test_false(validate_utf8("\u00f4\u0090\u0080\u0080"))
+test_true(validate_utf8("\u00f4\u0090\u0080\u0080", 1))
+test_false(validate_utf8("\u00f4\u0090\u0080\u0080", 2))
+
+test_false(validate_utf8("\u00f8\u0088\u0080\u0080\u0080"))
+test_false(validate_utf8("\u00fc\u0084\u0080\u0080\u0080\u0080"))
+test_false(validate_utf8("\u00fe\u0082\u0080\u0080\u0080\u0080\u0080"))
+test_true(validate_utf8("\u00fe\u0083\u00bf\u00bf\u00bf\u00bf\u00bf", 1))
+test_false(validate_utf8("\u00fe\u0084\u0080\u0080\u0080\u0080\u0080", 1))
+test_false(validate_utf8("\u00ff"))
+test_false(validate_utf8("\u00ff", 1))
+
+// Non-shortest forms
+test_false(validate_utf8("\u00c0\u0080"))
+test_false(validate_utf8("\u00c1\u00bf"))
+test_true(validate_utf8("\u00c2\u0080"))
+test_false(validate_utf8("\u00e0\u0080\u0080"))
+test_false(validate_utf8("\u00e0\u009f\u00bf"))
+test_true(validate_utf8("\u00e0\u00a0\u0080"))
+test_false(validate_utf8("\u00f0\u0080\u0080\u0080"))
+test_false(validate_utf8("\u00f0\u008f\u00bf\u00bf"))
+test_true(validate_utf8("\u00f0\u0090\u0080\u0080"))
+test_false(validate_utf8("\u00f8\u0080\u0080\u0080\u0080", 1))
+test_false(validate_utf8("\u00f8\u0087\u00bf\u00bf\u00bf", 1))
+test_true(validate_utf8("\u00f8\u0088\u0080\u0080\u0080", 1))
+test_false(validate_utf8("\u00fc\u0080\u0080\u0080\u0080\u0080", 1))
+test_false(validate_utf8("\u00fc\u0083\u00bf\u00bf\u00bf\u00bf", 1))
+test_true(validate_utf8("\u00fc\u0084\u0080\u0080\u0080\u0080", 1))
+test_false(validate_utf8("\u00fe\u0080\u0080\u0080\u0080\u0080\u0080", 1))
+test_false(validate_utf8("\u00fe\u0081\u00bf\u00bf\u00bf\u00bf\u00bf", 1))
+test_true(validate_utf8("\u00fe\u0082\u0080\u0080\u0080\u0080\u0080", 1))
 
 // - stringp
 // Tested in foop

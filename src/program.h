@@ -8,14 +8,13 @@
 #define PROGRAM_H
 
 #include "global.h"
-#include "pike_macros.h"
 #include "pike_error.h"
 #include "svalue.h"
 #include "time_stuff.h"
 #include "program_id.h"
-#include "pike_rusage.h"
 #include "block_allocator.h"
 #include "string_builder.h"
+#include "gc_header.h"
 
 /* Needed to support dynamic loading on NT */
 PMOD_EXPORT extern struct program_state * Pike_compiler;
@@ -152,6 +151,8 @@ typedef struct node_s node;
 #define PIKE_BYTECODE_PPC64    6
 #define PIKE_BYTECODE_ARM32    7
 #define PIKE_BYTECODE_ARM64    8
+#define PIKE_BYTECODE_RV32     9
+#define PIKE_BYTECODE_RV64     10
 
 #ifndef PIKE_BYTECODE_METHOD
 #error PIKE_BYTECODE_METHOD not set.
@@ -171,6 +172,10 @@ typedef struct node_s node;
 #define PIKE_OPCODE_T unsigned INT32
 #elif PIKE_BYTECODE_METHOD == PIKE_BYTECODE_ARM64
 #define PIKE_OPCODE_T unsigned INT32
+#elif PIKE_BYTECODE_METHOD == PIKE_BYTECODE_RV32
+#define PIKE_OPCODE_T unsigned INT16
+#elif PIKE_BYTECODE_METHOD == PIKE_BYTECODE_RV64
+#define PIKE_OPCODE_T unsigned INT16
 #else
 #define PIKE_OPCODE_T unsigned INT8
 #endif
@@ -617,9 +622,9 @@ struct identifier_lookup_cache
 
 struct program
 {
-  INT32 refs;
-
+  GC_MARKER_MEMBERS;
   INT32 id;             /* used to identify program in caches */
+
   /* storage_needed - storage needed in object struct
    * the first inherit[0].storage_offset bytes are not used and are
    * subtracted when inheriting.
@@ -852,6 +857,7 @@ PMOD_EXPORT void do_inherit(struct svalue *s,
 		INT32 flags,
 		struct pike_string *name);
 void compiler_do_inherit(node *n, INT32 flags, struct pike_string *name);
+void compiler_do_implement(node *n);
 int call_handle_inherit(struct pike_string *s);
 void simple_do_inherit(struct pike_string *s,
 		       INT32 flags,

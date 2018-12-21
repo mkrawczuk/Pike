@@ -1827,7 +1827,7 @@ static void f_pid_status_set_priority(INT32 args)
   char *to;
   int r;
 
-  get_all_args("set_priority", args, "%s", &to);
+  get_all_args(NULL, args, "%s", &to);
   r = set_priority( THIS->pid, to );
   pop_n_elems(args);
   push_int(r);
@@ -2005,7 +2005,7 @@ static void f_proc_reg_index(INT32 args)
     Pike_error("Process not stopped.\n");
   }
 
-  get_all_args("`[]", args, "%+", &regno);
+  get_all_args(NULL, args, "%+", &regno);
 
   if (regno * sizeof(long) > sizeof(((struct user *)NULL)->regs))
     SIMPLE_ARG_TYPE_ERROR("`[]", 1, "register number");
@@ -2100,6 +2100,9 @@ static void free_perishables(struct perishables *storage)
 
 #ifdef __NT__
 
+/* NB: Handles returned by this function are only safe as
+ *     long as the interpreter lock isn't released.
+ */
 static HANDLE get_inheritable_handle(struct mapping *optional,
 				     char *name,
 				     int for_reading)
@@ -2112,6 +2115,7 @@ static HANDLE get_inheritable_handle(struct mapping *optional,
     if(TYPEOF(*tmp) == T_OBJECT)
     {
       INT32 fd=fd_from_object(tmp->u.object);
+      HANDLE h;
 
       if(fd == -1)
 	Pike_error("File for %s is not open.\n",name);
@@ -2122,21 +2126,23 @@ static HANDLE get_inheritable_handle(struct mapping *optional,
 
 	create_proxy_pipe(tmp->u.object, for_reading);
 	fd=fd_from_object(Pike_sp[-1].u.object);
-
-	if(fd == -1)
-	  Pike_error("Proxy thread creation failed for %s.\n",name);
       }
 
+      if(fd_to_handle(fd, NULL, &h) < 0)
+	Pike_error("File for %s is not open.\n",name);
 
       if(!DuplicateHandle(GetCurrentProcess(),	/* Source process */
-			  da_handle[fd],
+			  h,
 			  GetCurrentProcess(),	/* Target process */
 			  &ret,
 			  0,			/* Access */
 			  1,
-			  DUPLICATE_SAME_ACCESS))
-	  /* This could cause handle-leaks */
-	  Pike_error("Failed to duplicate handle %d.\n", GetLastError());
+			  DUPLICATE_SAME_ACCESS)) {
+	release_fd(fd);
+	/* This could cause handle-leaks */
+	Pike_error("Failed to duplicate handle %d.\n", GetLastError());
+      }
+      release_fd(fd);
     }
   }
   pop_n_elems(Pike_sp-save_stack);
@@ -2773,7 +2779,7 @@ void f_create_process(INT32 args)
   struct svalue *tmp;
   int e;
 
-  check_all_args("create_process",args, BIT_ARRAY, BIT_MAPPING | BIT_VOID, 0);
+  check_all_args(NULL, args, BIT_ARRAY, BIT_MAPPING | BIT_VOID, 0);
 
   switch(args)
   {
@@ -4489,7 +4495,7 @@ static void f_pid_status_kill(INT32 args)
   INT_TYPE signum;
   int res, save_errno;
 
-  get_all_args("kill", args, "%+", &signum);
+  get_all_args(NULL, args, "%+", &signum);
 
   PROC_FPRINTF("[%d] kill: pid=%d, signum=%d\n", getpid(), pid, signum);
 
@@ -4585,7 +4591,7 @@ static void f_pid_status_kill(INT32 args)
 {
   INT_TYPE signum;
 
-  get_all_args("kill", args, "%i", &signum);
+  get_all_args(NULL, args, "%i", &signum);
 
   pop_n_elems(args);
 

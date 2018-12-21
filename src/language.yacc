@@ -74,6 +74,7 @@
 %token TOK_RESERVED "reserved identifier"
 %token TOK_IF "if"
 %token TOK_IMPORT "import"
+%token TOK_IMPLEMENT "implement"
 %token TOK_INHERIT "inherit"
 %token TOK_INLINE "inline"
 %token TOK_LOCAL_ID "local"
@@ -100,6 +101,7 @@
 %token TOK_PUBLIC "public"
 %token TOK_RSH_EQ ">>="
 %token TOK_STATIC "static"
+%token TOK_STATIC_ASSERT "_Static_assert"
 %token TOK_STRING_ID "string"
 %token TOK_SUB_EQ "-="
 %token TOK_TYPEDEF "typedef"
@@ -516,6 +518,48 @@ inheritance: modifiers TOK_INHERIT inherit_ref optional_rename_inherit ';'
     yyerror("Unexpected end of file.");
   }
   | modifiers TOK_INHERIT error '}' { yyerror("Missing ';'."); }
+  ;
+
+implement: modifiers TOK_IMPLEMENT inherit_ref ';'
+  {
+    if ($1 && (Pike_compiler->compiler_pass == COMPILER_PASS_FIRST)) {
+      yywarning("Modifiers ignored for implement.");
+    }
+    if($3) {
+      compiler_do_implement($3);
+    }
+    pop_stack();
+    if ($3) free_node($3);
+  }
+  | modifiers TOK_IMPLEMENT inherit_ref error ';'
+  {
+    if ($3) free_node($3);
+    pop_stack();
+    yyerrok;
+  }
+  | modifiers TOK_IMPLEMENT inherit_ref error TOK_LEX_EOF
+  {
+    if ($3) free_node($3);
+    pop_stack();
+    yyerror("Missing ';'.");
+    yyerror("Unexpected end of file.");
+  }
+  | modifiers TOK_IMPLEMENT inherit_ref error '}'
+  {
+    if ($3) free_node($3);
+    pop_stack();
+    yyerror("Missing ';'.");
+  }
+  | modifiers TOK_IMPLEMENT error ';' { yyerrok; }
+  | modifiers TOK_IMPLEMENT error TOK_LEX_EOF
+  {
+    yyerror("Missing ';'.");
+    yyerror("Unexpected end of file.");
+  }
+  | modifiers TOK_IMPLEMENT error '}'
+  {
+    yyerror("Missing ';'.");
+  }
   ;
 
 import: TOK_IMPORT idents ';'
@@ -1015,11 +1059,13 @@ def: modifiers optional_attributes simple_type optional_constant
   }
   | modifiers optional_attributes simple_type optional_constant name_list ';'
   | inheritance {}
+  | implement {}
   | import {}
   | constant {}
   | modifiers named_class { free_node($2); }
   | modifiers enum { free_node($2); }
   | typedef {}
+  | static_assertion expected_semicolon {}
   | error TOK_LEX_EOF
   {
     reset_type_stack();
@@ -1049,6 +1095,15 @@ def: modifiers optional_attributes simple_type optional_constant
     {
       THIS_COMPILATION->lex.pragmas=$<number>3;
     }
+  ;
+
+static_assertion: TOK_STATIC_ASSERT '(' expr0 ',' expr0 ')'
+  {
+    Pike_compiler->init_node =
+      mknode(F_COMMA_EXPR, Pike_compiler->init_node,
+	     mkefuncallnode("_Static_assert",
+			    mknode(F_ARG_LIST, $3, $5)));
+  }
   ;
 
 optional_dot_dot_dot: TOK_DOT_DOT_DOT { $$=1; }
@@ -1147,6 +1202,7 @@ magic_identifiers1:
   | TOK_OPTIONAL   { $$ = "optional"; }
   | TOK_VARIANT    { $$ = "variant"; }
   | TOK_WEAK       { $$ = "__weak__"; }
+  | TOK_STATIC_ASSERT	{ $$ = "_Static_assert"; }
   ;
 
 magic_identifiers2:
@@ -1186,6 +1242,7 @@ magic_identifiers3:
   | TOK_DEFAULT    { $$ = "default"; }
   | TOK_IMPORT     { $$ = "import"; }
   | TOK_INHERIT    { $$ = "inherit"; }
+  | TOK_IMPLEMENT  { $$ = "implement"; }
   | TOK_LAMBDA     { $$ = "lambda"; }
   | TOK_PREDEF     { $$ = "predef"; }
   | TOK_RETURN     { $$ = "return"; }
@@ -1388,8 +1445,9 @@ identifier_type: idents
   }
   | typeof
   {
-    if ($1) {
-      push_finished_type($1->u.sval.u.type);
+    if ($1 && CAR($1)) {
+      fix_type_field($1);
+      push_finished_type(CAR($1)->type);
       free_node($1);
     } else {
       push_finished_type(mixed_type_string);
@@ -1928,7 +1986,8 @@ statements: { $$=0; }
   }
   ;
 
-statement_with_semicolon: unused2 expected_semicolon ;
+statement_with_semicolon: unused2 expected_semicolon
+  ;
 
 normal_label_statement: statement_with_semicolon
   | import { $$=0; }
@@ -3125,67 +3184,12 @@ foreach_lvalues:  ',' safe_lvalue { $$=$2; }
 foreach: TOK_FOREACH save_block_level save_locals line_number_info
   '(' expr0 foreach_lvalues end_cond
   {
-    /* Fix AUTO type. */
-    struct pike_type *ind=NULL, *val=NULL;
-    if(Pike_compiler->compiler_pass == COMPILER_PASS_LAST)
-    {
-      fix_type_field( $6 );
-      fix_type_field( $7 );
-      check_foreach_type( $6, $7, &ind, &val );
-      if( $7->token == ':' )
-      {
-        if( CAR($7) && CAR($7)->type->type == PIKE_T_AUTO )
-        {
-          if( CAR($7)->token == F_LOCAL && !CAR($7)->u.integer.b)
-          {
-            copy_pike_type(Pike_compiler->compiler_frame->variable[CAR($7)->u.integer.a].type,
-                           ind);
-          }
-          else
-          {
-            yywarning("Unexpected auto type usage\n");
-          }
-        }
-        if( CDR($7) && CDR($7)->type->type == PIKE_T_AUTO )
-        {
-          if( CDR($7)->token == F_LOCAL && !CDR($7)->u.integer.b)
-          {
-            copy_pike_type(Pike_compiler->compiler_frame->variable[CDR($7)->u.integer.a].type,
-                           val);
-          }
-          else
-          {
-            yywarning("Unexpected auto type usage\n");
-          }
-        }
-      }
-      else
-      {
-        fix_type_field( $7 );
-        if( $7->type->type == PIKE_T_AUTO )
-        {
-          if( $7->token == F_LOCAL && !$7->u.integer.b)
-          {
-            copy_pike_type(Pike_compiler->compiler_frame->variable[$7->u.integer.a].type,
-                           val);
-          }
-          else
-          {
-            yywarning("Unexpected auto type usage\n");
-          }
-        }
-        /* old style foreach. */
-      }
-      if(ind)free_type(ind);
-      if(val)free_type(val);
-      $<number>$=0;
-    }
   }
   statement
   {
     if ($7) {
       $$=mknode(F_FOREACH,
-		mknode(F_VAL_LVAL,$6,$7),
+		mknode(F_FOREACH_VAL_LVAL,$6,$7),
 		$10);
     } else {
       /* Error in lvalue */
@@ -3686,6 +3690,7 @@ expr5: literal_expr
   | gauge
   | typeof
   | sscanf
+  | static_assertion { $$ = mknewintnode(0); }
   | lambda
   | implicit_modifiers anon_class { $$ = $2; }
   | implicit_modifiers enum { $$ = $2; }
@@ -4251,19 +4256,7 @@ gauge: TOK_GAUGE catch_arg
 
 typeof: TOK_TYPEOF '(' expr0 ')'
   {
-    struct pike_type *t;
-    node *tmp;
-
-    /* FIXME: Why build the node at all? */
-    /* Because the optimizer cannot optimize the root node of the
-     * tree properly -Hubbe
-     */
-    tmp=mknode(F_COMMA_EXPR, $3, 0);
-    optimize_node(tmp);
-
-    t=(tmp && CAR(tmp) && CAR(tmp)->type ? CAR(tmp)->type : mixed_type_string);
-    $$ = mktypenode(t);
-    free_node(tmp);
+    $$ = mknode(F_TYPEOF, $3, 0);
   }
   | TOK_TYPEOF '(' error ')' { $$=0; yyerrok; }
   | TOK_TYPEOF '(' error '}' { $$=0; yyerror("Missing ')'."); }
@@ -4603,6 +4596,8 @@ bad_expr_ident:
   { yyerror_reserved("import"); }
   | TOK_INHERIT
   { yyerror_reserved("inherit"); }
+  | TOK_IMPLEMENT
+  { yyerror_reserved("implement"); }
   ;
 
 /*
@@ -4920,10 +4915,7 @@ static node *find_versioned_identifier(struct pike_string *identifier,
   int old_major = Pike_compiler->compat_major;
   int old_minor = Pike_compiler->compat_minor;
   struct svalue *efun = NULL;
-  /* NOTE: Compilers warn about res being globbered by the setjmp,longjmp
-   * below. This warning is spurious because pop_stack() does not actually
-   * do the longjmp, instead f_index() does. */
-  node *res = NULL;
+  node *res;
 
   change_compiler_compatibility(major, minor);
 
@@ -4933,6 +4925,7 @@ static node *find_versioned_identifier(struct pike_string *identifier,
 
   /* Check predef:: first, and then the modules. */
 
+  res = NULL;
   if (TYPEOF(c->default_module) == T_MAPPING) {
     if ((efun = low_mapping_string_lookup(c->default_module.u.mapping,
 					  identifier)))
@@ -4972,27 +4965,26 @@ static node *find_versioned_identifier(struct pike_string *identifier,
 
 static int call_handle_import(struct pike_string *s)
 {
-  struct compilation *c = THIS_COMPILATION;
-  int args;
-
   ref_push_string(s);
-  ref_push_string(c->lex.current_file);
-  if (c->handler && c->handler->prog) {
-    ref_push_object(c->handler);
-    args = 3;
-  }
-  else args = 2;
+  if (safe_apply_current(PC_HANDLE_IMPORT_FUN_NUM, 1)) {
+    if ((1 << TYPEOF(Pike_sp[-1])) &
+	(BIT_MAPPING|BIT_OBJECT|BIT_PROGRAM|BIT_ZERO)) {
+      if (SAFE_IS_ZERO(Pike_sp - 1)) {
+	pop_stack();
+	push_int(0);
+      }
+      if (TYPEOF(Pike_sp[-1]) != T_INT) return 1;
 
-  if (safe_apply_handler("handle_import", c->handler, c->compat_handler,
-			 args, BIT_MAPPING|BIT_OBJECT|BIT_PROGRAM|BIT_ZERO))
-    if (TYPEOF(Pike_sp[-1]) != T_INT)
-      return 1;
-    else {
       pop_stack();
       my_yyerror("Couldn't find module to import: %S", s);
+      return 0;
     }
-  else
-    handle_compile_exception ("Error finding module to import");
+    my_yyerror("Invalid return value from handle_import: %O", Pike_sp-1);
+    pop_stack();
+    return 0;
+  }
+  handle_compile_exception ("Error finding module to import");
+  pop_stack();
 
   return 0;
 }

@@ -9,6 +9,7 @@
 
 #include "svalue.h"
 #include "dmalloc.h"
+#include "gc_header.h"
 
 /* Compatible with PIKE_WEAK_INDICES and PIKE_WEAK_VALUES. */
 #define MAPPING_WEAK_INDICES	2
@@ -26,7 +27,7 @@ struct keypair
 
 struct mapping_data
 {
-  INT32 refs;
+  GC_MARKER_MEMBERS;
   INT32 valrefs; /* lock values too */
   INT32 hardlinks;
   INT32 size, hashsize;
@@ -43,7 +44,7 @@ struct mapping_data
 
 struct mapping
 {
-  INT32 refs;
+  GC_MARKER_MEMBERS;
 #ifdef MAPPING_SIZE_DEBUG
   INT32 debug_size;
 #endif
@@ -353,6 +354,7 @@ PMOD_EXPORT struct array *mapping_values(struct mapping *m);
 PMOD_EXPORT struct array *mapping_to_array(struct mapping *m);
 PMOD_EXPORT void mapping_replace(struct mapping *m,struct svalue *from, struct svalue *to);
 PMOD_EXPORT struct mapping *mkmapping(struct array *ind, struct array *val);
+PMOD_EXPORT void clear_mapping(struct mapping *m);
 PMOD_EXPORT struct mapping *copy_mapping(struct mapping *m);
 PMOD_EXPORT struct mapping *merge_mappings(struct mapping *a, struct mapping *b, INT32 op);
 PMOD_EXPORT struct mapping *merge_mapping_array_ordered(struct mapping *a,

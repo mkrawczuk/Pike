@@ -14,7 +14,6 @@
 #include <ctype.h>
 
 #include "stralloc.h"
-#include "global.h"
 #include "pike_macros.h"
 #include "object.h"
 #include "interpret.h"
@@ -259,7 +258,7 @@ void image_make_ascii(INT32 args)
   int i, x, y,xy=0,y2=0, xmax=0,ymax=0,max;
   struct pike_string *s;
 
-  get_all_args("make_ascii", args, "%o%o%o%o.%d%d%d",
+  get_all_args(NULL, args, "%o%o%o%o.%d%d%d",
 	       &objs[0], &objs[1], &objs[2], &objs[3],
 	       &tlevel, &xchar_size, &ychar_size);
 
@@ -479,7 +478,7 @@ static inline rgb_group _pixel_apply_max(struct image *img,
    else
      res.g = (COLORTYPE)testrange(g * qdiv + default_rgb.g);
    if (sumb)
-     res.b = (COLORTYPE)testrange(default_rgb.g + b/(sumb * div));
+     res.b = (COLORTYPE)testrange(default_rgb.b + b/(sumb * div));
    else
      res.b = (COLORTYPE)testrange(b * qdiv + default_rgb.b);
 #ifdef MATRIX_DEBUG
@@ -620,7 +619,7 @@ void image_apply_max(INT32 args)
    if (args>3)
    {
      struct array *a;
-     get_all_args("apply_max", args, "%a%d%d%d", &a,
+     get_all_args(NULL, args, "%a%d%d%d", &a,
                   &default_rgb.r, &default_rgb.g, &default_rgb.b);
    }
    else

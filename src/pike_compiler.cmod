@@ -26,7 +26,6 @@
 #include "builtin_functions.h"
 #include "mapping.h"
 #include "cyclic.h"
-#include "pike_types.h"
 #include "opcodes.h"
 #include "version.h"
 #include "block_allocator.h"
@@ -36,6 +35,7 @@
 #include "module_support.h"
 #include "bitvector.h"
 #include "sprintf.h"
+#include "cpp.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -92,7 +92,7 @@ static const int lock_depth = 1;
 #define CDFPRINTF(...)
 #endif /* COMPILER_DEBUG */
 
-static struct program *reporter_program = NULL;
+struct program *reporter_program = NULL;
 struct program *compilation_program = 0;
 struct program *compilation_env_program = 0;
 struct object *compilation_environment = NULL;
@@ -462,7 +462,7 @@ static void f_reporter_report(INT32 args)
     f_sprintf(args - 4);
     args = 5;
   }
-  get_all_args("report", args, "%d%W%+%W%W",
+  get_all_args(NULL, args, "%d%W%+%W%W",
 	       &level, &filename, &linenumber, &subsystem, &message);
 
   /* Ignore informational level messages */
@@ -611,21 +611,27 @@ static void f_compilation_env_compile(INT32 args)
 }
 
 /*! @decl mixed resolv(string identifier, string filename, @
- *!		       object|void handler)
+ *!		       object|void handler, object|void compat_handler)
  *!
  *!   Look up @[identifier] in the current context.
  *!
  *!   The default implementation calls the corresponding
- *!   function in the master object.
+ *!   function in the handlers (if any), falling back to
+ *!   the master object.
+ *!
+ *! @returns
+ *!   Returns the value of the @[identifier] if found, and
+ *!   @[UNDEFINED] if not.
  */
 static void f_compilation_env_resolv(INT32 args)
 {
   struct pike_string *ident;
   struct pike_string *filename;
   struct object *handler = NULL;
+  struct object *compat_handler = NULL;
 
-  get_all_args("resolv", args, "%W%W.%O",
-	       &ident, &filename, &handler);
+  get_all_args(NULL, args, "%W%W.%O%O",
+	       &ident, &filename, &handler, &compat_handler);
 
   if(get_master())
   {
@@ -636,7 +642,7 @@ static void f_compilation_env_resolv(INT32 args)
     }else{
       SET_CYCLIC_RET(1);
 
-      APPLY_MASTER("resolv", args);
+      low_unsafe_apply_handler("resolv", handler, compat_handler, args);
     }
     END_CYCLIC();
   } else {
@@ -727,6 +733,28 @@ static void f_compilation_env_handle_inherit(INT32 args)
   }
 }
 
+/*! @decl program handle_import(string module, string current_file, @
+ *!                             object|void handler)
+ *!
+ *!   Look up an import @[module].
+ *!
+ *!   The default implementation calls the corresponding function
+ *!   in the master object.
+ *!
+ *! @seealso
+ *!   @[MasterObject()->handle_import()].
+ */
+static void f_compilation_env_handle_import(INT32 args)
+{
+  if(get_master())
+  {
+    APPLY_MASTER("handle_import", args);
+  } else {
+    pop_n_elems(args);
+    push_undefined();
+  }
+}
+
 #if 0
 /* @decl int filter_exception(SeverityLevel level, mixed err)
  *
@@ -745,7 +773,7 @@ static void f_compilation_env_filter_exception(INT32 args)
   int level;
   struct svalue *err;
 
-  get_all_args("filter_exception", args, "%d%*", &level, &err);
+  get_all_args(NULL, args, "%d%*", &level, &err);
   if (args > 2) {
     pop_n_elems(args-2);
     args = 2;
@@ -1376,7 +1404,7 @@ static void f_compilation_report(INT32 args)
   /* FIXME: get_all_args() ought to have a marker
    *        indicating that we accept more arguments...
    */
-  get_all_args("report", args, "%d", &level);
+  get_all_args(NULL, args, "%d", &level);
 
   if ((c->handler || c->compat_handler)) {
     const char *fun_name = "compile_warning";
@@ -1415,7 +1443,7 @@ static void f_compilation_report(INT32 args)
     f_sprintf(args - 4);
     args = 5;
   }
-  get_all_args("report", args, "%d%W%+%W%W",
+  get_all_args(NULL, args, "%d%W%+%W%W",
 	       &level, &filename, &linenumber,
 	       &subsystem, &message);
 
@@ -1494,7 +1522,7 @@ static void f_compilation_create(INT32 args)
 
   STACK_LEVEL_START(args);
 
-  get_all_args("create", args, ".%W%O%d%d%P%O",
+  get_all_args(NULL, args, ".%W%O%d%d%P%O",
 	       &aprog, &ahandler,
 	       &amajor, &aminor,
 	       &atarget, &aplaceholder);
@@ -1562,7 +1590,7 @@ static void f_compilation_compile(INT32 args)
     Pike_error("PikeCompiler in use.\n");
   }
 
-  get_all_args("compile", args, "");
+  get_all_args(NULL, args, "");
 
   check_c_stack(65536);
 
@@ -1666,29 +1694,39 @@ static void f_compilation_compile(INT32 args)
     push_int(0);
 }
 
-/*! @decl mixed resolv(string identifier, string filename, @
- *!                    object handler)
+/*! @decl mixed resolv(string identifier)
  *!
  *!   Resolve the symbol @[identifier].
  *!
- *!   The default implementation calls the corresponding function
- *!   in any active handler, and otherwise falls back to
- *!   @[CompilerEnvironment()->resolv()] in the parent object.
+ *!   The default implementation calls @[CompilerEnvironment()->resolv()]
+ *!   in the parent object, with the remaining arguments taken from the
+ *!   current @[PikeCompiler] context.
+ *!
+ *! @returns
+ *!   Returns the value of @[sym] if found, and @[UNDEFINED] if not.
  */
 static void f_compilation_resolv(INT32 args)
 {
+  struct pike_string *sym;
   struct compilation *c = THIS_COMPILATION;
   struct object *handler;
   int fun = -1;
 
-  if (((handler = c->handler) && handler->prog &&
-       ((fun = find_identifier("resolv", handler->prog)) != -1)) ||
-      ((handler = c->compat_handler) && handler->prog &&
-       ((fun = find_identifier("resolv", handler->prog)) != -1))) {
-    apply_low(handler, fun, args);
+  get_all_args(NULL, args, "%W", &sym);
+
+  ref_push_string(sym);
+  ref_push_string(c->lex.current_file);
+  if (c->handler) {
+    ref_push_object(c->handler);
   } else {
-    apply_external(1, CE_RESOLV_FUN_NUM, args);
+    push_undefined();
   }
+  if (c->compat_handler) {
+    ref_push_object(c->compat_handler);
+  } else {
+    push_undefined();
+  }
+  apply_external(1, CE_RESOLV_FUN_NUM, 4);
 }
 
 /*! @decl object get_compilation_handler(int major, int minor)
@@ -1763,8 +1801,7 @@ static void f_compilation_change_compiler_compatibility(INT32 args)
 
   STACK_LEVEL_START(args);
 
-  get_all_args("change_compiler_compatibility", args, "%d%d",
-	       &major, &minor);
+  get_all_args(NULL, args, "%d%d", &major, &minor);
 
   if ((major == -1) && (minor == -1)) {
     major = PIKE_MAJOR_VERSION;
@@ -1896,6 +1933,35 @@ static void f_compilation_handle_inherit(INT32 args)
   }
 }
 
+/*! @decl program handle_import(string module)
+ *!
+ *!   Look up an import @[module].
+ */
+static void f_compilation_handle_import(INT32 args)
+{
+  struct compilation *c = THIS_COMPILATION;
+  struct object *handler;
+  int fun = -1;
+
+  if (args > 1) pop_n_elems(args-1);
+
+  ref_push_string(c->lex.current_file);
+  if (c->handler && c->handler->prog) {
+    ref_push_object(c->handler);
+    args = 3;
+  }
+  else args = 2;
+
+  if (((handler = c->handler) && handler->prog &&
+       ((fun = find_identifier("handle_import", handler->prog)) != -1)) ||
+      ((handler = c->compat_handler) && handler->prog &&
+       ((fun = find_identifier("handle_import", handler->prog)) != -1))) {
+    apply_low(handler, fun, args);
+  } else {
+    apply_external(1, CE_HANDLE_IMPORT_FUN_NUM, args);
+  }
+}
+
 /*! @decl int(0..1) pop_type_attribute(string attribute, type a, type b)
  *!
  *!   Type attribute handler.
@@ -1922,7 +1988,7 @@ static void f_compilation_pop_type_attribute(INT32 args)
   struct compilation *c = THIS_COMPILATION;
   struct pike_string *deprecated_string;
 
-  get_all_args("pop_type_attribute", args, "%W%*%*", &attr, &a, &b);
+  get_all_args(NULL, args, "%W%*%*", &attr, &a, &b);
 
   if (Pike_compiler->compiler_pass == COMPILER_PASS_LAST) {
     MAKE_CONST_STRING(deprecated_string, "deprecated");
@@ -1964,7 +2030,7 @@ static void f_compilation_push_type_attribute(INT32 args)
   struct compilation *c = THIS_COMPILATION;
   struct pike_string *deprecated_string;
 
-  get_all_args("push_type_attribute", args, "%W%*%*", &attr, &a, &b);
+  get_all_args(NULL, args, "%W%*%*", &attr, &a, &b);
 
   if (Pike_compiler->compiler_pass == COMPILER_PASS_LAST) {
     MAKE_CONST_STRING(deprecated_string, "deprecated");
@@ -2020,7 +2086,7 @@ static void f_compilation_apply_type_attribute(INT32 args)
   struct compilation *c = THIS_COMPILATION;
   struct pike_string *deprecated_string;
 
-  get_all_args("apply_type_attribute", args, "%W%*.%*", &attr, &a, &b);
+  get_all_args(NULL, args, "%W%*.%*", &attr, &a, &b);
 
   if (Pike_compiler->compiler_pass == COMPILER_PASS_LAST) {
     MAKE_CONST_STRING(deprecated_string, "deprecated");
@@ -2084,7 +2150,7 @@ static void f_compilation_apply_attribute_constant(INT32 args)
   struct pike_string *attribute;
   struct pike_string *test;
   struct svalue *sval;
-  get_all_args("apply_attribute_constant", args, "%S%*", &attribute, &sval);
+  get_all_args(NULL, args, "%S%*", &attribute, &sval);
 
   if ((TYPEOF(*sval) == T_INT) && !sval->u.integer) {
     pop_n_elems(args);
@@ -2168,7 +2234,7 @@ static void low_enter_compiler(struct object *ce, int inherit)
    */
   new_frame->current_program = ce->prog;
   add_ref(new_frame->current_program);
-  new_frame->context = compilation_program->inherits + inherit;
+  new_frame->context = ce->prog->inherits + inherit;
   new_frame->current_storage = ce->storage + new_frame->context->storage_offset;
 #ifdef PIKE_DEBUG
   if (new_frame->context->prog != compilation_program) {
@@ -2178,7 +2244,6 @@ static void low_enter_compiler(struct object *ce, int inherit)
 #endif /* PIKE_DEBUG */
   new_frame->fun = new_frame->context->identifier_level + PC_COMPILE_FUN_NUM;
   new_frame->locals = Pike_sp;
-  new_frame->expendible_offset = 0;
   new_frame->save_sp_offset = 0;
   new_frame->save_mark_sp = Pike_mark_sp;
   new_frame->args = 0;
@@ -2216,8 +2281,8 @@ PMOD_EXPORT void enter_compiler(struct pike_string *filename,
 PMOD_EXPORT void exit_compiler(void)
 {
 #ifdef PIKE_DEBUG
-  if ((Pike_fp->current_program != compilation_program) ||
-      (Pike_fp->fun != PC_COMPILE_FUN_NUM)) {
+  if ((Pike_fp->context->prog != compilation_program) ||
+      (Pike_fp->fun != Pike_fp->context->identifier_level + PC_COMPILE_FUN_NUM)) {
     Pike_fatal("exit_compiler(): Frame stack out of whack!\n");
   }
 #endif /* PIKE_DEBUG */
@@ -2641,6 +2706,9 @@ static void compile_compiler(void)
   ADD_FUNCTION("handle_inherit", f_compilation_handle_inherit,
 	       tFunc(tStr, tPrg(tObj)), 0);
 
+  ADD_FUNCTION("handle_import", f_compilation_handle_import,
+	       tFunc(tStr, tPrg(tObj)), 0);
+
   ADD_FUNCTION("pop_type_attribute", f_compilation_pop_type_attribute,
 	       tFunc(tStr tType(tMix) tType(tMix), tInt01), 0);
 
@@ -2684,7 +2752,7 @@ static void compile_compiler(void)
   PIKE_MAP_VARIABLE("p", OFFSETOF(compilation, p),
 		    tPrg(tObj), PIKE_T_PROGRAM, ID_HIDDEN);
   PIKE_MAP_VARIABLE("current_file", OFFSETOF(compilation, lex.current_file),
-		    tStr, PIKE_T_STRING, ID_HIDDEN);
+		    tStr, PIKE_T_STRING, ID_PROTECTED);
   PIKE_MAP_VARIABLE("default_module", OFFSETOF(compilation, default_module),
 		    tOr(tMap(tStr,tMix),tObj), PIKE_T_MIXED, 0);
 
@@ -2708,6 +2776,9 @@ static void compile_compiler(void)
 	       tFunc(tNone, tOr(tMap(tStr, tMix), tObj)), 0);
 
   ADD_FUNCTION("handle_inherit", f_compilation_env_handle_inherit,
+	       tFunc(tStr tStr tOr(tObj, tVoid), tPrg(tObj)), 0);
+
+  ADD_FUNCTION("handle_import", f_compilation_env_handle_import,
 	       tFunc(tStr tStr tOr(tObj, tVoid), tPrg(tObj)), 0);
 
   /* Reporter */
@@ -2741,6 +2812,8 @@ static void compile_compiler(void)
     compiler_environment_lock_event_handler;
   Pike_compiler->new_program->flags |= PROGRAM_DESTRUCT_IMMEDIATE;
   end_class("lock", 0);
+
+  init_cpp_compilerenv_classes();
 
   compilation_env_program = end_program();
 
@@ -2960,6 +3033,14 @@ void init_pike_compiler(void)
 
     SET_SVAL(s, T_OBJECT, 0, object, placeholder_object);
     low_add_constant("__placeholder_object", &s);
+  }
+
+  {
+    struct pike_string *attr;
+    struct svalue s;
+    MAKE_CONST_STRING(attr, "utf8_string");
+    SET_SVAL(s, T_TYPE, 0, type, utf8_type_string);
+    low_add_efun(attr, &s);
   }
 
   exit_compiler();
