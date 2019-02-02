@@ -3,7 +3,7 @@
 #
 
 # Use this to pass arguments to configure. Leave empty to keep previous args.
-#CONFIGUREARGS=
+CONFIGUREARGS=--with-debug
 
 # Set this to any generic make options you'd otherwise would have to
 # pass on the command line. (Using the magic MAKEFLAGS variable
