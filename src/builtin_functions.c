@@ -1647,6 +1647,109 @@ PMOD_EXPORT void f_add_constant(INT32 args)
 #define AMIGAOS_COMBINE_PATH
 #include "combine_path.h"
 
+static ptrdiff_t find_last_path_separator(struct pike_string *path,
+					  p_wchar2 sep,
+					  ptrdiff_t pos)
+{
+  switch(path->size_shift) {
+  case eightbit:
+    {
+      p_wchar0 *str = STR0(path);
+      while (pos--) {
+	if (str[pos] == sep) return pos;
+      }
+    }
+    break;
+  case sixteenbit:
+    {
+      p_wchar1 *str = STR1(path);
+      while (pos--) {
+	if (str[pos] == sep) return pos;
+      }
+    }
+    break;
+  case thirtytwobit:
+    {
+      p_wchar2 *str = STR2(path);
+      while (pos--) {
+	if (str[pos] == sep) return pos;
+      }
+    }
+    break;
+  default:
+    Pike_fatal("Unsupported string width.\n");
+    break;
+  }
+  return -1;
+}
+
+/*! @decl string dirname(string path)
+ *!
+ *! Returns all but the last segment of a path. Some example inputs and
+ *! outputs:
+ *!
+ *! @xml{<matrix>
+ *! <r><c><b>Expression</b></c><c><b>Value</b></c></r>
+ *! <r><c>dirname("/a/b")</c><c>"/a"</c></r>
+ *! <r><c>dirname("/a/")</c><c>"/a"</c></r>
+ *! <r><c>dirname("/a")</c><c>"/"</c></r>
+ *! <r><c>dirname("/")</c><c>"/"</c></r>
+ *! <r><c>dirname("")</c><c>""</c></r>
+ *! </matrix>@}
+ *!
+ *! @seealso
+ *! @[basename()], @[explode_path()]
+ */
+PMOD_EXPORT void f_dirname(INT32 args)
+{
+  struct pike_string *s = NULL;
+  ptrdiff_t pos, pos2 = -1;
+
+#ifdef __NT__
+  check_all_args("dirname", args, BIT_STRING, 0);
+  push_text("\\");
+  push_text("/");
+  f_replace(3);
+#endif
+
+  get_all_args("dirname", args, "%t", &s);
+
+  pos = find_last_path_separator(s, '/', s->len);
+  if (pos < 0) {
+    ref_push_string(empty_pike_string);
+  } else if (pos) {
+    push_string(string_slice(s, 0, pos));
+  } else {
+    push_text("/");
+  }
+  stack_pop_n_elems_keep_top(args);
+}
+
+/*! @decl string basename(string path)
+ *!
+ *! Returns the last segment of a path.
+ *!
+ *! @seealso
+ *! @[dirname()], @[explode_path()]
+ */
+PMOD_EXPORT void f_basename(INT32 args)
+{
+  struct pike_string *s = NULL;
+  ptrdiff_t pos, pos2 = -1;
+
+  get_all_args("basename", args, "%t", &s);
+
+  pos = find_last_path_separator(s, '/', s->len);
+#ifdef __NT__
+  pos2 = find_last_path_separator(s, '\\', s->len);
+  if (pos2 > pos) pos = pos2;
+#endif /* __NT__ */
+  if (pos < 0) {
+    return;
+  }
+  push_string(string_slice(s, pos+1, s->len - (pos+1)));
+  stack_pop_n_elems_keep_top(args);
+}
 
 
 /*! @decl int zero_type(mixed a)
@@ -3070,80 +3173,6 @@ PMOD_EXPORT void f_get_active_compiler(INT32 args)
   push_undefined();
 }
 
-/*! @decl CompilationHandler get_active_compilation_handler()
- *!
- *!   Returns the currently active compilation compatibility handler, or
- *!   @tt{0@} (zero) if none is active.
- *!
- *! @note
- *!   This function should only be used during a call of @[compile()].
- *!
- *! @seealso
- *!   @[get_active_error_handler()], @[compile()],
- *!   @[master()->get_compilation_handler()], @[CompilationHandler]
- */
-PMOD_EXPORT void f_get_active_compilation_handler(INT32 args)
-{
-  struct compilation *c = NULL;
-
-  if (compilation_program) {
-    struct pike_frame *compiler_frame = Pike_fp;
-
-    while (compiler_frame &&
-	   (compiler_frame->context->prog != compilation_program)) {
-      compiler_frame = compiler_frame->next;
-    }
-
-    if (compiler_frame) {
-      c = (struct compilation *)compiler_frame->current_storage;
-    }
-  }
-
-  pop_n_elems(args);
-  if (c && c->compat_handler) {
-    ref_push_object(c->compat_handler);
-  } else {
-    push_int(0);
-  }
-}
-
-/*! @decl CompilationHandler get_active_error_handler()
- *!
- *!   Returns the currently active compilation error handler
- *!   (second argument to @[compile()]), or @tt{0@} (zero) if none
- *!   is active.
- *!
- *! @note
- *!   This function should only be used during a call of @[compile()].
- *!
- *! @seealso
- *!   @[get_active_compilation_handler()], @[compile()], @[CompilationHandler]
- */
-PMOD_EXPORT void f_get_active_error_handler(INT32 args)
-{
-  struct compilation *c = NULL;
-
-  if (compilation_program) {
-    struct pike_frame *compiler_frame = Pike_fp;
-
-    while (compiler_frame &&
-	   (compiler_frame->context->prog != compilation_program)) {
-      compiler_frame = compiler_frame->next;
-    }
-
-    if (compiler_frame) {
-      c = (struct compilation *)compiler_frame->current_storage;
-    }
-  }
-
-  pop_n_elems(args);
-  if (c && c->handler) {
-    ref_push_object(c->handler);
-  } else {
-    push_int(0);
-  }
-}
-
 /*! @decl array allocate(int size)
  *! @decl array allocate(int size, mixed init)
  *!
@@ -3500,6 +3529,10 @@ PMOD_EXPORT void f_crypt(INT32 args)
   char *ret, *pwd = NULL, *saltp = NULL;
   char *alphabet =
     "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+#ifdef HAVE_CRYPT_R
+  struct crypt_data crypt_data;
+  crypt_data.initialized = 0;
+#endif
 
   get_all_args("crypt", args, ".%s%s", &pwd, &saltp);
 
@@ -3542,15 +3575,38 @@ PMOD_EXPORT void f_crypt(INT32 args)
       args = 1;
     }
   }
-#ifdef HAVE_CRYPT
+
+  /* NB: crypt(3C) with modern algorithms may be quite slow,
+   *     so release the interpreter lock if possible.
+   */
+#ifdef HAVE_CRYPT_R
+  /* Glibc reentrant version of crypt(3C). */
+  THREADS_ALLOW();
+  {
+    ret = crypt_r(pwd, saltp, &crypt_data);
+  }
+  THREADS_DISALLOW();
+#elif defined(HAVE_CRYPT)
+#ifdef SOLARIS
+  /* NB: crypt(3C) on Solaris (since at least Solaris 8) is
+   *     documented to be thread-safe (due to returning a
+   *     thread-local buffer).
+   *
+   *     On Linux (glibc 2.27) and MacOS X (Darwin 13.4.0) it
+   *     is documented NOT to be thread-safe.
+   */
+  THREADS_ALLOW();
+#endif
   ret = (char *)crypt(pwd, saltp);
-#else
-#ifdef HAVE__CRYPT
+#ifdef SOLARIS
+  THREADS_DISALLOW();
+#endif
+#elif defined(HAVE__CRYPT)
   ret = (char *)_crypt(pwd, saltp);
 #else
 #error No crypt function found and fallback failed.
 #endif
-#endif
+
   if (!ret) {
     switch(errno) {
 #ifdef ELIBACC
@@ -4109,8 +4165,8 @@ PMOD_EXPORT void f_types(INT32 args)
   push_array(a);
 }
 
-/*! @decl array(array(Pike.Annotation)) annotations(object|program|function x, @
- *!                                                 int(0..1)|void recurse)
+/*! @decl array(multiset(Pike.Annotation)) annotations(object|program|function x, @
+ *!                                                    int(0..1)|void recurse)
  *!
  *!   Return an array with the annotations for all symbols in @[x].
  *!
@@ -4123,17 +4179,23 @@ PMOD_EXPORT void f_types(INT32 args)
  *!       For other objects an array with annotations for all non-protected
  *!       symbols is returned.
  *!     @type program
- *!       Returns an array with annotations for all non-protected symbols.
+ *!       Returns an array with annotations for all non-protected
+ *!       constant symbols.
  *!   @endmixed
  *!
  *! @param recurse
  *!   Include annotations recursively added via inherits.
  *!
+ *! @returns
+ *!   The order of the resulting array is the same as that of @[indices()]
+ *!   for the same @[x].
+ *!
  *! @note
  *!   This function was added in Pike 8.1.
  *!
  *! @seealso
- *!   @[indices()], @[values()], @[types()]
+ *!   @[indices()], @[values()], @[types()], @[lfun::_annotations()],
+ *!   @[::_annotations()]
  */
 PMOD_EXPORT void f_annotations(INT32 args)
 {
@@ -4143,26 +4205,25 @@ PMOD_EXPORT void f_annotations(INT32 args)
   struct svalue *arg = NULL;
   ptrdiff_t flags = 0;
 
-  get_all_args("annotations", args, "%O.%i", &arg, &flags);
+  get_all_args("annotations", args, "%*.%i", &arg, &flags);
 
   if (flags & ~(ptrdiff_t)1) {
     SIMPLE_ARG_TYPE_ERROR("annotations", 2, "int(0..1)|void");
   }
 
-  switch(TYPEOF(Pike_sp[-args]))
+  switch(TYPEOF(*arg))
   {
   case T_OBJECT:
-    a = object_annotations(Pike_sp[-args].u.object, SUBTYPEOF(Pike_sp[-args]),
-			   flags);
+    a = object_annotations(arg->u.object, SUBTYPEOF(Pike_sp[-args]), flags);
     break;
 
   case T_PROGRAM:
-    a = program_annotations(Pike_sp[-args].u.program, flags);
+    a = program_annotations(arg->u.program, flags);
     break;
 
   case T_FUNCTION:
     {
-      struct program *p = program_from_svalue(Pike_sp-args);
+      struct program *p = program_from_svalue(arg);
       if (p) {
 	a = program_annotations(p, flags);
 	break;
@@ -5345,6 +5406,7 @@ PMOD_EXPORT void f_sleep(INT32 args)
    pop_n_elems(args);
 
    delaysleep(delay, do_abort_on_signal, 0);
+   low_check_threads_etc();
 }
 
 #undef FIX_LEFT
@@ -9621,10 +9683,11 @@ PMOD_EXPORT void f_program_identifier_defined(INT32 args)
 
   if(IDENTIFIER_IS_PIKE_FUNCTION( id->identifier_flags ) &&
      id->func.offset != -1)
-      file = low_get_line(id_prog->program + id->func.offset, id_prog, &line);
+    file = low_get_line(id_prog->program + id->func.offset, id_prog,
+			&line, NULL);
   else if (IDENTIFIER_IS_CONSTANT (id->identifier_flags) &&
-           id->func.const_info.offset >= 0 &&
-           (p2 = program_from_svalue (&id_prog->constants[id->func.const_info.offset].sval)))
+	   id->func.const_info.offset >= 0 &&
+	   (p2 = program_from_svalue (&id_prog->constants[id->func.const_info.offset].sval)))
       file = low_get_program_line (p2, &line);
   else
       /* The program line is better than nothing for C functions. */
@@ -9767,8 +9830,9 @@ PMOD_EXPORT void f_function_defined(INT32 args)
     id_prog = PROG_FROM_INT (p, func);
 
     if(IDENTIFIER_IS_PIKE_FUNCTION( id->identifier_flags ) &&
-      id->func.offset != -1)
-      file = low_get_line(id_prog->program + id->func.offset, id_prog, &line);
+       id->func.offset != -1)
+      file = low_get_line(id_prog->program + id->func.offset, id_prog,
+			  &line, NULL);
     else if (IDENTIFIER_IS_CONSTANT (id->identifier_flags) &&
 	     id->func.const_info.offset >= 0 &&
 	     (p2 = program_from_svalue (&id_prog->constants[id->func.const_info.offset].sval)))
@@ -9879,16 +9943,6 @@ void init_builtin_efuns(void)
   ADD_EFUN("get_active_compiler", f_get_active_compiler,
 	   tFunc(tNone, tObj), OPT_EXTERNAL_DEPEND);
 
-  /* function(:object) */
-  ADD_EFUN("get_active_compilation_handler",
-	   f_get_active_compilation_handler,
-	   tFunc(tNone, tObj), OPT_EXTERNAL_DEPEND);
-
-  /* function(:object) */
-  ADD_EFUN("get_active_error_handler",
-	   f_get_active_error_handler,
-	   tFunc(tNone, tObj), OPT_EXTERNAL_DEPEND);
-
   /* function(int,void|0=mixed:array(0)) */
   ADD_EFUN("allocate", f_allocate,
 	   tFunc(tInt tOr(tVoid,tSetvar(0,tMix)),tArr(tVar(0))), 0);
@@ -9896,17 +9950,25 @@ void init_builtin_efuns(void)
   /* function(mixed:int) */
   ADD_EFUN("arrayp", f_arrayp,tFunc(tMix,tInt01),0);
 
+  ADD_EFUN("basename", f_basename, tFunc(tSetvar(0, tStr), tVar(0)), 0);
+
   /* function(string...:string) */
-  ADD_EFUN("combine_path_nt",f_combine_path_nt,tFuncV(tNone,tStr,tStr),0);
-  ADD_EFUN("combine_path_unix",f_combine_path_unix,tFuncV(tNone,tStr,tStr),0);
-  ADD_EFUN("combine_path_amigaos",f_combine_path_amigaos,tFuncV(tNone,tStr,tStr),0);
+  ADD_EFUN("combine_path_nt", f_combine_path_nt,
+	   tFuncV(tNone, tSetvar(0, tStr), tVar(0)), 0);
+  ADD_EFUN("combine_path_unix", f_combine_path_unix,
+	   tFuncV(tNone, tSetvar(0, tStr), tVar(0)), 0);
+  ADD_EFUN("combine_path_amigaos", f_combine_path_amigaos,
+	   tFuncV(tNone, tSetvar(0, tStr), tVar(0)), 0);
 #if defined(__NT__)
-  ADD_EFUN("combine_path",f_combine_path_nt,tFuncV(tNone,tStr,tStr),0);
+  ADD_EFUN("combine_path", f_combine_path_nt,
+	   tFuncV(tNone, tSetvar(0, tStr), tVar(0)), 0);
 #else
 #ifdef __amigaos__
-  ADD_EFUN("combine_path",f_combine_path_amigaos,tFuncV(tNone,tStr,tStr),0);
+  ADD_EFUN("combine_path", f_combine_path_amigaos,
+	   tFuncV(tNone, tSetvar(0, tStr), tVar(0)), 0);
 #else
-  ADD_EFUN("combine_path",f_combine_path_unix,tFuncV(tNone,tStr,tStr),0);
+  ADD_EFUN("combine_path", f_combine_path_unix,
+	   tFuncV(tNone, tSetvar(0, tStr), tVar(0)), 0);
 #endif
 #endif
 
@@ -9923,6 +9985,8 @@ void init_builtin_efuns(void)
 
   /* function(object|void:void) */
   ADD_EFUN("destruct",f_destruct,tFunc(tOr(tObj,tVoid),tVoid),OPT_SIDE_EFFECT);
+
+  ADD_EFUN("dirname", f_dirname, tFunc(tSetvar(0, tStr), tVar(0)), 0);
 
   /* function(mixed,mixed:int) */
   ADD_EFUN("equal",f_equal,tFunc(tMix tMix,tInt01),OPT_TRY_OPTIMIZE);
@@ -10145,9 +10209,9 @@ void init_builtin_efuns(void)
 		 tFunc(tMultiset, tArr(tType(tInt1))),
 		 tFunc(tOr(tObj,tPrg(tObj)), tArr(tType(tMix)))),0,NULL,0);
 
-  /* function(object|program, int|void:array(array)) */
+  /* function(object|program, int(0..1)|void:array(multiset)) */
   ADD_EFUN2("annotations", f_annotations,
-	    tFunc(tOr(tObj,tPrg(tObj) tOr(tInt01,tVoid)), tArr(tArr(tMix))),0,NULL,0);
+	    tFunc(tOr(tObj,tPrg(tObj) tOr(tInt01,tVoid)), tArr(tSet(tMix))),0,NULL,0);
 
   /* function(mixed:int) */
   ADD_EFUN2("zero_type",f_zero_type,tFunc(tMix,tInt01),0,0,generate_zero_type);

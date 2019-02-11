@@ -1217,27 +1217,47 @@ test_any([[
   return catch { Builtin.__Backtrace_Tester__(); }[1][-1][2];
 ]], Builtin.__Backtrace_Tester__)
 
-test_compile_warning([[
-  class A { static int foo = 1; int bar() { return foo; } }
-]])
 test_any_equal([[
   // Test that filename and line numbers in backtraces are correct.
   // This specific test used to trigger two different bugs.
   // cf [LysLysKOM 22997909].
   int whee(string w)
   {
-#line 7 "whee-before"
+#line 8 "whee-before"
     int x = 0;
     error("whee!\n");
-#line 10 "whee-after"
+#line 11 "whee-after"
     string q = "wq";
     q += "21";
     return sizeof(q + w);
-  }
-#line 15 "test"
+  };
+#line 16 "test"
   mixed err = catch { whee("foo"); };
   return ({ err[1][-1][0], err[1][-1][1] });
-]], ({ "whee-before", 8 }))
+]], ({ "whee-before", 9 }))
+
+test_compile_warning([[
+  class A { static int foo = 1; int bar() { return foo; } }
+]])
+
+test_any_equal([[
+  // Test that filename and line numbers in backtraces are correct.
+  // This specific test used to trigger two different bugs.
+  // cf [LysLysKOM 22997909].
+  int whee(string w)
+  {
+#line 8 "whee-before"
+    int x = 0;
+    error("whee!\n");
+#line 11 "whee-after"
+    string q = "wq";
+    q += "21";
+    return sizeof(q + w);
+  };
+#line 16 "test"
+  mixed err = catch { whee("foo"); };
+  return ({ err[1][-1][0], err[1][-1][1] });
+]], ({ "whee-before", 9 }))
 
 test_any([[
   // Test multiple inherit of same symbol,
@@ -5894,6 +5914,35 @@ test_any([[multiset m=(<>);int e;
   for(e=0;e<1000;e++) if(m[reverse(e)]!=1) return e;
   return -1;
 ]],-1)
+
+
+test_any([[multiset m = (<>); int e; int f;
+  for (e = 0; e < 100;e++) {
+    for (f = e; f < 100; f++) {
+      m_add(m, f);
+    }
+  }
+  for (e = 0; e < 100; e++) {
+    f = -1;
+    while (m_delete(m, e)) f++;
+    if (f != e) return e;
+  }
+  return -1;
+]], -1)
+
+test_any([[multiset m = (<>); int e; int f;
+  for (e = 0; e < 100;e++) {
+    for (f = e; f < 100; f++) {
+      m_add(m, e);
+    }
+  }
+  for (e = 0; e < 100; e++) {
+    f = e;
+    while (m_delete(m, e)) f++;
+    if (f != 100) return e;
+  }
+  return -1;
+]], -1)
 
 
 test_any([[multiset m=(<>);int e;
@@ -10913,6 +10962,69 @@ test_compile_error([[
     // This fails due to bad return type compared with A::foo().
     float foo() { return 1.0; }
   }
+]])
+
+test_any_equal([[
+  class A {
+    @"class_A";
+    @"constant_foo":constant foo = 0;
+    @"function_bar":void bar() {}
+    @"variable_baz":mixed baz;
+    mixed a_none;
+    @"variable_b_none":mixed b_none;
+  }
+  class B {
+    @"class_B";
+    @"inherit_A":inherit A;
+    @"variable_buz":mixed buz;
+    @"variable_a_none":mixed a_none;
+    mixed b_none;
+  }
+  A a = A();
+  B b = B();
+  return ({
+    mkmapping(indices(A), annotations(A)),
+    mkmapping(indices(A), annotations(A, 1)),
+    mkmapping(indices(a), annotations(a)),
+    mkmapping(indices(a), annotations(a, 1)),
+    mkmapping(indices(B), annotations(B)),
+    mkmapping(indices(B), annotations(B, 1)),
+    mkmapping(indices(b), annotations(b)),
+    mkmapping(indices(b), annotations(b, 1)),
+  });
+]], [[
+  ({
+    ([ "foo": (< "constant_foo" >), ]),
+    ([ "foo": (< "class_A", "constant_foo" >), ]),
+    ([ "foo": (< "constant_foo" >),
+       "bar": (< "function_bar" >),
+       "baz": (< "variable_baz" >),
+       "a_none": 0,
+       "b_none": (< "variable_b_none" >),
+    ]),
+    ([ "foo": (< "class_A", "constant_foo" >),
+       "bar": (< "class_A", "function_bar" >),
+       "baz": (< "class_A", "variable_baz" >),
+       "a_none": (< "class_A" >),
+       "b_none": (< "class_A", "variable_b_none" >),
+    ]),
+    ([ "foo": (< "constant_foo" >), ]),
+    ([ "foo": (< "class_B", "class_A", "inherit_A", "constant_foo" >), ]),
+    ([ "foo": (< "constant_foo" >),
+       "bar": (< "function_bar" >),
+       "baz": (< "variable_baz" >),
+       "buz": (< "variable_buz" >),
+       "a_none": (< "variable_a_none" >),
+       "b_none": 0,
+    ]),
+    ([ "foo": (< "class_B", "class_A", "inherit_A", "constant_foo" >),
+       "bar": (< "class_B", "class_A", "inherit_A", "function_bar" >),
+       "baz": (< "class_B", "class_A", "inherit_A", "variable_baz" >),
+       "buz": (< "class_B", "variable_buz" >),
+       "a_none": (< "class_B", "variable_a_none" >),
+       "b_none": (< "class_B" >),
+    ]),
+  })
 ]])
 
 // foop

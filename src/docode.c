@@ -44,6 +44,7 @@ struct statement_label_name
 {
   struct statement_label_name *next;
   struct pike_string *str;
+  struct pike_string *file;
   INT_TYPE line_number;
   int used;
 };
@@ -1005,6 +1006,7 @@ static int do_docode2(node *n, int flags)
   case F_MAGIC_INDICES:
   case F_MAGIC_VALUES:
   case F_MAGIC_TYPES:
+  case F_MAGIC_ANNOTATIONS:
     emit2(n->token,
 	  n->u.node.b->u.sval.u.integer,
 	  n->u.node.a->u.sval.u.integer);
@@ -2393,6 +2395,7 @@ static int do_docode2(node *n, int flags)
     PUSH_STATEMENT_LABEL;
     name.str = CAR(n)->u.sval.u.string;
     name.line_number = n->line_number;
+    name.file = n->current_file;
     name.used = 0;
 
     for (label = current_label; label; label = label->prev) {
@@ -2400,10 +2403,13 @@ static int do_docode2(node *n, int flags)
       for (lbl_name = label->name; lbl_name; lbl_name = lbl_name->next)
 	if (lbl_name->str == name.str) {
 	  INT_TYPE save_line = c->lex.current_line;
+	  struct pike_string *save_file = c->lex.current_file;
 	  c->lex.current_line = name.line_number;
+	  c->lex.current_file = name.file;
 	  my_yyerror("Duplicate nested labels, previous one on line %d.",
 		     lbl_name->line_number);
 	  c->lex.current_line = save_line;
+	  c->lex.current_file = save_file;
 	  goto label_check_done;
 	}
     }
@@ -2800,6 +2806,22 @@ static int do_docode2(node *n, int flags)
       emit1(F_CONSTANT, (INT32)tmp1);
     }
     return 1;
+
+  case F_FRAME_TYPE:
+  case F_FRAME_NAME:
+    {
+      if (n->token == F_FRAME_TYPE) {
+	tmp1 = store_constant(&CDR(n)->u.sval, 0, NULL);
+      } else {
+	tmp1 = store_prog_string(CDR(n)->u.sval.u.string);
+      }
+      emit2(n->token, CAR(n)->u.sval.u.integer, tmp1);
+    }
+    return 0;
+
+  case F_FRAME_END:
+    emit1(F_FRAME_END, CAR(n)->u.sval.u.integer);
+    return 0;
 
   default:
     Pike_fatal("Infernal compiler error (unknown parse-tree-token %d).\n", n->token);

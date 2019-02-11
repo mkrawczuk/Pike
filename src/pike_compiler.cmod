@@ -267,7 +267,7 @@ int unlink_current_supporter(struct Supporter *c)
     ret++;
     c->next_dependant = c->depends_on->dependants;
     c->depends_on->dependants=c;
-    add_ref(c->self);
+    add_ref(c->self.u.object);
     CDFPRINTF("th(%ld) unlink_current_supporter() "
               "supporter=%p (prog %p) depends on %p (prog %p).\n",
               (long) th_self(), c, c->prog,
@@ -308,7 +308,7 @@ int call_dependants(struct Supporter *s, int finish)
     verify_supporters();
     if (!tmp->fun(tmp->data, finish)) ok = 0;
     verify_supporters();
-    free_object(tmp->self);
+    free_object(tmp->self.u.object);
   }
   return ok;
 }
@@ -813,6 +813,7 @@ static void free_compilation(struct compilation *c)
     free_string(c->prog);
     c->prog = NULL;
   }
+#ifdef SUPPORT_COMPILER_HANDLERS
   if(c->handler) {
     free_object(c->handler);
     c->handler = NULL;
@@ -821,6 +822,7 @@ static void free_compilation(struct compilation *c)
     free_object(c->compat_handler);
     c->compat_handler = NULL;
   }
+#endif /* SUPPORT_COMPILER_HANDLERS */
   if(c->target) {
     free_program(c->target);
     c->target = NULL;
@@ -855,8 +857,10 @@ static void run_init(struct compilation *c)
 {
   debug_malloc_touch(c);
 
+#ifdef SUPPORT_COMPILER_HANDLERS
   if (c->compat_handler) free_object(c->compat_handler);
   c->compat_handler=0;
+#endif /* SUPPORT_COMPILER_HANDLERS */
 
   if (c->resolve_cache) {
     free_mapping(c->resolve_cache);
@@ -1278,8 +1282,9 @@ static int call_delayed_pass2(struct compilation *cc, int finish)
             (long) th_self(), cc->p, finish ? "continuing" : "cleaning up");
 
   /* Reenter the delayed compilation. */
-  add_ref(cc->supporter.self);
-  low_enter_compiler(cc->supporter.self, cc->compilation_inherit);
+  add_ref(cc->supporter.self.u.object);
+  low_enter_compiler(cc->supporter.self.u.object,
+		     SUBTYPEOF(cc->supporter.self));
 
   if (finish && cc->p) {
     if (cc->flags & COMPILER_NEED_EXTRA_PASS) {
@@ -1320,9 +1325,9 @@ static void compilation_event_handler(int e)
   case PROG_EVENT_INIT:
     CDFPRINTF("th(%ld) compilation: INIT(%p).\n", (long) th_self(), c);
     memset(c, 0, sizeof(*c));
-    c->supporter.self = Pike_fp->current_object; /* NOTE: Not ref-counted! */
-    c->compilation_inherit =
-      Pike_fp->context - Pike_fp->current_object->prog->inherits;
+    SET_SVAL(c->supporter.self, T_OBJECT,
+	     Pike_fp->context - Pike_fp->current_object->prog->inherits,
+	     object, Pike_fp->current_object); /* NOTE: Not ref-counted! */
     buffer_init(&c->used_modules);
     SET_SVAL(c->default_module, T_MAPPING, 0, mapping, get_builtin_constants());
     add_ref(c->default_module.u.mapping);
@@ -1406,6 +1411,7 @@ static void f_compilation_report(INT32 args)
    */
   get_all_args(NULL, args, "%d", &level);
 
+#ifdef SUPPORT_COMPILER_HANDLERS
   if ((c->handler || c->compat_handler)) {
     const char *fun_name = "compile_warning";
 
@@ -1430,6 +1436,7 @@ static void f_compilation_report(INT32 args)
       }
     }
   }
+#endif /* SUPPORT_COMPILER_HANDLERS */
   /* Nothing apropriate in any handlers.
    * Call the report() in our parent.
    */
@@ -1548,8 +1555,10 @@ static void f_compilation_create(INT32 args)
   if (c->prog) free_string(c->prog);
   if ((c->prog=aprog)) add_ref(aprog);
 
+#ifdef SUPPORT_COMPILER_HANDLERS
   if (c->handler) free_object(c->handler);
   if ((c->handler=ahandler)) add_ref(ahandler);
+#endif /* SUPPORT_COMPILER_HANDLERS */
 
   if (c->target) free_program(c->target);
   if ((c->target=atarget)) add_ref(atarget);
@@ -1557,8 +1566,8 @@ static void f_compilation_create(INT32 args)
   if (c->placeholder) free_object(c->placeholder);
   if ((c->placeholder=aplaceholder)) add_ref(aplaceholder);
 
-  c->major = amajor?amajor:-1;
-  c->minor = aminor?aminor:-1;
+  c->major = amajor;
+  c->minor = aminor;
 
   STACK_LEVEL_DONE(args);
   pop_n_elems(args);
@@ -1716,6 +1725,7 @@ static void f_compilation_resolv(INT32 args)
 
   ref_push_string(sym);
   ref_push_string(c->lex.current_file);
+#ifdef SUPPORT_COMPILER_HANDLERS
   if (c->handler) {
     ref_push_object(c->handler);
   } else {
@@ -1726,6 +1736,10 @@ static void f_compilation_resolv(INT32 args)
   } else {
     push_undefined();
   }
+#else /* !SUPPORT_COMPILER_HANDLERS */
+  push_undefined();
+  push_undefined();
+#endif /* SUPPORT_COMPILER_HANDLERS */
   apply_external(1, CE_RESOLV_FUN_NUM, 4);
 }
 
@@ -1742,6 +1756,7 @@ static void f_compilation_get_compilation_handler(INT32 args)
   struct object *handler;
   int fun = -1;
 
+#ifdef SUPPORT_COMPILER_HANDLERS
   if (((handler = c->handler) && handler->prog &&
        ((fun = find_identifier("get_compilation_handler", handler->prog)) != -1)) ||
       ((handler = c->compat_handler) && handler->prog &&
@@ -1750,6 +1765,7 @@ static void f_compilation_get_compilation_handler(INT32 args)
   } else {
     apply_external(1, CE_GET_COMPILATION_HANDLER_FUN_NUM, args);
   }
+#endif /* SUPPORT_COMPILER_HANDLERS */
 }
 
 /*! @decl mapping(string:mixed)|object get_default_module()
@@ -1779,14 +1795,18 @@ static void f_compilation_get_default_module(INT32 args)
   struct object *handler;
   int fun = -1;
 
+#ifdef SUPPORT_COMPILER_HANDLERS
   if (((handler = c->handler) && handler->prog &&
        ((fun = find_identifier("get_default_module", handler->prog)) != -1)) ||
       ((handler = c->compat_handler) && handler->prog &&
        ((fun = find_identifier("get_default_module", handler->prog)) != -1))) {
     apply_low(handler, fun, args);
   } else {
+#endif /* SUPPORT_COMPILER_HANDLERS */
     apply_external(1, CE_GET_DEFAULT_MODULE_FUN_NUM, args);
+#ifdef SUPPORT_COMPILER_HANDLERS
   }
+#endif /* SUPPORT_COMPILER_HANDLERS */
 }
 
 /*! @decl void change_compiler_compatibility(int major, int minor)
@@ -1819,6 +1839,7 @@ static void f_compilation_change_compiler_compatibility(INT32 args)
   Pike_compiler->compat_major=major;
   Pike_compiler->compat_minor=minor;
 
+#ifdef SUPPORT_COMPILER_HANDLERS
   /* Optimization: The up to date compiler shouldn't need a compat handler. */
   if((major != PIKE_MAJOR_VERSION) || (minor != PIKE_MINOR_VERSION))
   {
@@ -1863,6 +1884,9 @@ static void f_compilation_change_compiler_compatibility(INT32 args)
       return;
     }
   }
+#else /* !SUPPORT_COMPILER_HANDLERS */
+  pop_n_elems(args);
+#endif /* SUPPORT_COMPILER_HANDLERS */
 
   STACK_LEVEL_CHECK(0);
 
@@ -1917,20 +1941,27 @@ static void f_compilation_handle_inherit(INT32 args)
   if (args > 1) pop_n_elems(args-1);
 
   ref_push_string(c->lex.current_file);
+#ifdef SUPPORT_COMPILER_HANDLERS
   if (c->handler && c->handler->prog) {
     ref_push_object(c->handler);
     args = 3;
   }
-  else args = 2;
+  else
+#endif /* !SUPPORT_COMPILER_HANDLERS */
+    args = 2;
 
+#ifdef SUPPORT_COMPILER_HANDLERS
   if (((handler = c->handler) && handler->prog &&
        ((fun = find_identifier("handle_inherit", handler->prog)) != -1)) ||
       ((handler = c->compat_handler) && handler->prog &&
        ((fun = find_identifier("handle_inherit", handler->prog)) != -1))) {
     apply_low(handler, fun, args);
   } else {
+#endif /* SUPPORT_COMPILER_HANDLERS */
     apply_external(1, CE_HANDLE_INHERIT_FUN_NUM, args);
+#ifdef SUPPORT_COMPILER_HANDLERS
   }
+#endif /* SUPPORT_COMPILER_HANDLERS */
 }
 
 /*! @decl program handle_import(string module)
@@ -1946,20 +1977,27 @@ static void f_compilation_handle_import(INT32 args)
   if (args > 1) pop_n_elems(args-1);
 
   ref_push_string(c->lex.current_file);
+#ifdef SUPPORT_COMPILER_HANDLERS
   if (c->handler && c->handler->prog) {
     ref_push_object(c->handler);
     args = 3;
   }
-  else args = 2;
+  else
+#endif /* SUPPORT_COMPILER_HANDLERS */
+    args = 2;
 
+#ifdef SUPPORT_COMPILER_HANDLERS
   if (((handler = c->handler) && handler->prog &&
        ((fun = find_identifier("handle_import", handler->prog)) != -1)) ||
       ((handler = c->compat_handler) && handler->prog &&
        ((fun = find_identifier("handle_import", handler->prog)) != -1))) {
     apply_low(handler, fun, args);
   } else {
+#endif /* SUPPORT_COMPILER_HANDLERS */
     apply_external(1, CE_HANDLE_IMPORT_FUN_NUM, args);
+#ifdef SUPPORT_COMPILER_HANDLERS
   }
+#endif /* SUPPORT_COMPILER_HANDLERS */
 }
 
 /*! @decl int(0..1) pop_type_attribute(string attribute, type a, type b)
@@ -2193,6 +2231,7 @@ static void f_compilation__sprintf(INT32 args)
   } else {
     string_builder_strcat(&buf, "UNDEFINED, ");
   }
+#ifdef SUPPORT_COMPILER_HANDLERS
   if (c->handler) {
     ref_push_object(c->handler);
     string_builder_sprintf(&buf, "%O, ", Pike_sp-1);
@@ -2200,6 +2239,7 @@ static void f_compilation__sprintf(INT32 args)
   } else {
     string_builder_strcat(&buf, "UNDEFINED, ");
   }
+#endif /* SUPPORT_COMPILER_HANDLERS */
   string_builder_sprintf(&buf, "%d, %d, %s, %s)",
 			 c->major, c->minor,
 			 c->target?"target":"UNDEFINED",
@@ -2517,7 +2557,11 @@ void handle_compile_exception (const char *yyerror_fmt, ...)
 
   push_svalue(&thrown);
   /* safe_apply_current(PC_FILTER_EXCEPTION_FUN_NUM, 1); */
+#ifdef SUPPORT_COMPILER_HANDLERS
   low_safe_apply_handler("compile_exception", c->handler, c->compat_handler, 1);
+#else /* !SUPPORT_COMPILER_HANDLERS */
+  SAFE_APPLY_MASTER("compile_exception", 1);
+#endif /* SUPPORT_COMPILER_HANDLERS */
 
   if (SAFE_IS_ZERO(Pike_sp-1)) {
     struct pike_string *s = format_exception_for_error_msg (&thrown);
@@ -2747,10 +2791,12 @@ static void compile_compiler(void)
   /* Map some of our variables so that the gc can find them. */
   PIKE_MAP_VARIABLE("prog", OFFSETOF(compilation, prog),
 		    tStr, PIKE_T_STRING, ID_HIDDEN);
+#ifdef SUPPORT_COMPILER_HANDLERS
   PIKE_MAP_VARIABLE("handler", OFFSETOF(compilation, handler),
 		    tObj, PIKE_T_OBJECT, 0);
   PIKE_MAP_VARIABLE("compat_handler", OFFSETOF(compilation, compat_handler),
 		    tObj, PIKE_T_OBJECT, 0);
+#endif /* SUPPORT_COMPILER_HANDLERS */
   PIKE_MAP_VARIABLE("target", OFFSETOF(compilation, target),
 		    tPrg(tObj), PIKE_T_PROGRAM, ID_HIDDEN);
   PIKE_MAP_VARIABLE("placeholder", OFFSETOF(compilation, placeholder),
@@ -2865,12 +2911,22 @@ node *low_pop_local_variables(int level, node *block)
     int e;
     e=--(Pike_compiler->compiler_frame->current_number_of_locals);
     if (block) {
-      block = mknode(F_COMMA_EXPR, block,
-		     mknode(F_POP_VALUE,
-			    mknode(F_ASSIGN,
-				   mklocalnode(e, 0),
-				   mkintnode(0)),
-			    NULL));
+      struct local_variable *var = Pike_compiler->compiler_frame->variable + e;
+      block = mknode(F_COMMA_EXPR,
+		     mknode(F_FRAME_TYPE, mkintnode(e),
+			    mktypenode(var->type)),
+		     mknode(F_COMMA_EXPR,
+			    mknode(F_FRAME_NAME, mkintnode(e),
+				   mkstrnode(var->name)),
+			    mknode(F_COMMA_EXPR, block,
+				   mknode(F_COMMA_EXPR,
+					  mknode(F_POP_VALUE,
+						 mknode(F_ASSIGN,
+							mklocalnode(e, 0),
+							mkintnode(0)),
+						 NULL),
+					  mknode(F_FRAME_END,
+						 mkintnode(e), NULL)))));
     }
     if ((Pike_compiler->compiler_pass == COMPILER_PASS_LAST) &&
 	!(Pike_compiler->compiler_frame->variable[e].flags &
@@ -3121,10 +3177,6 @@ PIKECLASS InheritedClass
 
   /*! @decl @@Inherited
    */
-  EXTRA
-  {
-    add_to_annotations(NULL);
-  }
 }
 /*! @endclass
  */
@@ -3139,8 +3191,11 @@ EXTRA
 {
   Inherited_annotation = clone_object(InheritedClass_program, 0);
   add_object_constant("Inherited", Inherited_annotation, 0);
+  assert(!InheritedClass_program->inherits[0].annotations);
   ref_push_object(Inherited_annotation);
-  InheritedClass_program->annotations[0] = aggregate_array(1);
+  f_aggregate_multiset(1);
+  InheritedClass_program->inherits[0].annotations = Pike_sp[-1].u.multiset;
+  Pike_sp--;
 }
 
 /*! @class AutoCodecClass
@@ -3260,6 +3315,10 @@ void init_pike_compiler(void)
 {
   add_program_constant("CompilerEnvironment", compilation_env_program, 0);
 
+#ifndef SUPPORT_COMPILER_HANDLERS
+  ADD_INT_CONSTANT("__HAVE_COMPILER_NO_HANDLERS__", 1, 0);
+#endif /* !SUPPORT_COMPILER_HANDLERS */
+
   INIT;
 
   {
@@ -3300,8 +3359,8 @@ void cleanup_pike_compiler(void)
   }
   if (Inherited_annotation) {
     /* Break the circularity. */
-    do_free_array(InheritedClass_program->annotations[0]);
-    InheritedClass_program->annotations[0] = NULL;
+    do_free_multiset(InheritedClass_program->inherits[0].annotations);
+    InheritedClass_program->inherits[0].annotations = NULL;
     free_object(Inherited_annotation);
     Inherited_annotation = NULL;
   }

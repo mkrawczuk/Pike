@@ -186,6 +186,8 @@ const char *const lfun_names[]  = {
   "``**",
   "_sqrt",
   "_annotations",
+  "_m_clear",
+  "_m_add",
 };
 
 struct pike_string *lfun_strings[NELEM(lfun_names)];
@@ -251,7 +253,10 @@ static const char *const raw_lfun_types[] = {
   tFuncV(tOr3(tInt,tFloat,tObj),tVoid,tOr3(tObj,tInt,tFloat)),	/* "pow", */
   tFuncV(tOr3(tInt,tFloat,tObj),tVoid,tOr3(tObj,tInt,tFloat)),	/* "rpow", */
   tFunc(tVoid,tMix),            /* "_sqrt", */
-  tFuncV(tNone,tVoid,tArray),   /* "_annotations", */
+  tFuncV(tOr(tVoid,tObj) tOr(tVoid,tInt)
+	 tOr(tInt01,tVoid),tVoid,tArray),   /* "_annotations", */
+  tFuncV(tNone, tVoid, tVoid),	/* "_m_clear", */
+  tFuncV(tZero, tVoid, tVoid),	/* "_m_add", */
 };
 
 /* These two are not true LFUNs! */
@@ -1383,6 +1388,70 @@ static struct pike_type *lfun_setter_type_string = NULL;
  *!   @[predef::random()], @[RandomInterface]
  */
 
+/*! @decl object|int|float lfun::`**(int|float|object exp)
+ *!   Called by @[predef::`**()].
+ *!
+ *! @seealso
+ *!   @[predef::`**()], @[lfun::``**()]
+ */
+
+/*! @decl object|int|float lfun::``**(int|float|object base)
+ *!   Called by @[predef::`**()].
+ *!
+ *! @seealso
+ *!   @[predef::`**()], @[lfun::`**()]
+ */
+
+/*! @decl mixed lfun::_sqrt()
+ *!   Called by @[sqrt()].
+ *!
+ *! @seealso
+ *!   @[sqrt()]
+ */
+
+/*! @decl array lfun::_annotations(object|void context, int|void access, @
+ *!                                int(0..1)|void recursive)
+ *!   Called by @[annotations()]
+ *!
+ *! @param context
+ *!   Inherit in the current object to return the annotations for.
+ *!   If @expr{UNDEFINED@} or left out, @expr{this_program::this@}
+ *!   should be used (ie start at the current context and ignore
+ *!   any overloaded symbols).
+ *!
+ *! @param access
+ *!   Access permission override. One of the following:
+ *!   @int
+ *!     @value 0
+ *!     @value UNDEFINED
+ *!       See only public symbols.
+ *!     @value 1
+ *!       See protected symbols as well.
+ *!   @endint
+ *!
+ *! @param recursive
+ *!   Include nested annotations from the inherits.
+ *!
+ *! @seealso
+ *!   @[annotations()]
+ */
+
+/*! @decl void lfun::_m_clear()
+ *!
+ *!   Called by @[m_clear()].
+ *!
+ *! @seealso
+ *!   @[lfun::_m_delete()], @[lfun::_m_add()]
+ */
+
+/*! @decl void lfun::_m_add()
+ *!
+ *!   Called by @[m_add()].
+ *!
+ *! @seealso
+ *!   @[lfun::_m_delete()], @[lfun::_m_clear()]
+ */
+
 /**** END FAKE LFUNS ****/
 /**** BEGIN MAGIC LFUNS ****/
 
@@ -1493,7 +1562,7 @@ static struct program *gc_mark_program_pos = 0;
 
 #define CHECK_FILE_ENTRY(PROG, STRNO)					\
   do {									\
-    if ((STRNO < 0) || (STRNO >= PROG->num_strings))			\
+    if ((STRNO >= PROG->num_strings))			\
       Pike_fatal ("Invalid file entry in linenumber info.\n");		\
   } while (0)
 
@@ -2422,6 +2491,9 @@ struct node_s *program_magic_identifier (struct program_state *state,
     } else if(ident == lfun_strings[LFUN__TYPES]) {
       return mknode(F_MAGIC_TYPES, mknewintnode(i),
 		    mknewintnode(state_depth));
+    } else if(ident == lfun_strings[LFUN__ANNOTATIONS]) {
+      return mknode(F_MAGIC_ANNOTATIONS, mknewintnode(i),
+		    mknewintnode(state_depth));
     }
 
     if (inherit_num && !TEST_COMPAT(7, 8) &&
@@ -3188,19 +3260,6 @@ void low_start_new_program(struct program *p,
       free_type(i->type);
       i->type=get_type_of_svalue(&tmp);
     }
-
-    /* Reset annotations so that they can be readded properly. */
-    for (e = 0; e < p->num_annotations; e++) {
-      do_free_array(p->annotations[e]);
-      p->annotations[e] = NULL;
-    }
-    for (e = 0; e < p->num_inherits; e++) {
-      struct inherit *inh = p->inherits + e;
-      if (inh->inherit_level > 1) continue;
-      if (!inh->annotations) continue;
-      free_array(inh->annotations);
-      inh->annotations = NULL;
-    }
   }
   if (pass == COMPILER_PASS_FIRST) {
     if(c->compilation_depth >= 1) {
@@ -3212,10 +3271,10 @@ void low_start_new_program(struct program *p,
   if(idp) *idp=id;
 
   CDFPRINTF("th(%ld) %p low_start_new_program() %s "
-            "pass=%d: lock_depth:%d, compilation_depth:%d\n",
+            "pass=%d: compilation_depth:%d\n",
             (long)th_self(), p, name ? name->str : "-",
             Pike_compiler->compiler_pass,
-            lock_depth, c->compilation_depth);
+            c->compilation_depth);
 
   init_type_stack();
 
@@ -3441,9 +3500,9 @@ PMOD_EXPORT void debug_start_new_program(INT_TYPE line, const char *file)
   }
 
   CDFPRINTF("th(%ld) start_new_program(%ld, %s): "
-            "lock_depth:%d, compilation_depth:%d\n",
+            "compilation_depth:%d\n",
             (long)th_self(), (long)line, file,
-            lock_depth, c->compilation_depth);
+            c->compilation_depth);
 
   low_start_new_program(0, COMPILER_PASS_FIRST, 0, 0, 0);
   store_linenumber(line,c->lex.current_file);
@@ -3497,7 +3556,7 @@ static void exit_program_struct(struct program *p)
 
   if (p->annotations) {
     for (e = 0; e < p->num_annotations; e++) {
-      do_free_array(p->annotations[e]);
+      do_free_multiset(p->annotations[e]);
     }
   }
 
@@ -3527,7 +3586,7 @@ static void exit_program_struct(struct program *p)
     for(e=0; e<p->num_inherits; e++)
     {
       if (p->inherits[e].annotations)
-	free_array(p->inherits[e].annotations);
+	free_multiset(p->inherits[e].annotations);
       if(p->inherits[e].name)
 	free_string(p->inherits[e].name);
       if(e)
@@ -3607,6 +3666,19 @@ void dump_program_desc(struct program *p)
       fprintf(stderr,"name  : %s\n",p->inherits[e].name->str);
     }
 
+    if (p->inherits[e].annotations) {
+      union msnode *node = low_multiset_first(p->inherits[e].annotations->msd);
+      fprintf(stderr, "annotations:\n");
+      while (node) {
+	if (TYPEOF(node->i.ind) != T_DELETED) {
+	  low_push_multiset_index(node);
+	  safe_pike_fprintf(stderr, "  %O\n", Pike_sp-1);
+	  pop_stack();
+	}
+	node = low_multiset_next(node);
+      }
+    }
+
     for(d=0;d<p->inherits[e].inherit_level;d++) fprintf(stderr,"  ");
     fprintf(stderr,"inherit_level: %d\n",p->inherits[e].inherit_level);
 
@@ -3663,6 +3735,24 @@ void dump_program_desc(struct program *p)
     fprintf(stderr,"%3d (%3d):",e,q);
     for(d=0;d<INHERIT_FROM_INT(p,e)->inherit_level;d++) fprintf(stderr,"  ");
     fprintf(stderr,"%s;\n", ID_FROM_INT(p,e)->name->str);
+  }
+
+  if (p->annotations) {
+    fprintf(stderr, "All identifier annotations:\n");
+    for (q = 0; q < p->num_annotations; q++) {
+      struct multiset *l = p->annotations[q];
+      union msnode *node;
+      if (!l) continue;
+      fprintf(stderr, "  Identifier #%d: %s\n",
+	      q, p->identifiers[q].name->str);
+      for (node = low_multiset_first(l->msd);
+	   node;
+	   node = low_multiset_next(node)) {
+	low_push_multiset_index(node);
+	safe_pike_fprintf(stderr, "    %O\n", Pike_sp-1);
+	pop_stack();
+      }
+    }
   }
 
   fprintf(stderr,"$$$$$ dump_program_desc for %p done\n", p);
@@ -3846,6 +3936,17 @@ PMOD_EXPORT void dump_program_tables (const struct program *p, int indent)
 	    inh->parent_identifier, inh->parent_offset,
 	    inh->parent ? inh->parent->program_id : -1,
 	    inh->identifier_ref_offset);
+
+    if (inh->annotations) {
+      union msnode *node = low_multiset_first(inh->annotations->msd);
+      int i;
+      for (i = 0; node; (node = low_multiset_next(node)), i++) {
+	fprintf(stderr, "%*s        annotation #%d: ", indent, "", i);
+	low_push_multiset_index(node);
+	safe_pike_fprintf(stderr, "%O\n", Pike_sp-1);
+	pop_stack();
+      }
+    }
   }
   fprintf(stderr, "\n"
 	  "%*sIdentifier table:\n"
@@ -3863,6 +3964,16 @@ PMOD_EXPORT void dump_program_tables (const struct program *p, int indent)
 	    indent, "",
 	    p->num_strings?p->strings[id->filename_strno]->str:"-",
 	    (long)id->linenumber);
+    if ((d < p->num_annotations) && p->annotations[d]) {
+      union msnode *node = low_multiset_first(p->annotations[d]->msd);
+      int i;
+      for (i = 0; node; (node = low_multiset_next(node)), i++) {
+	fprintf(stderr, "%*s        annotation #%d: ", indent, "", i);
+	low_push_multiset_index(node);
+	safe_pike_fprintf(stderr, "%O\n", Pike_sp-1);
+	pop_stack();
+      }
+    }
   }
 
   fprintf(stderr, "\n"
@@ -4257,11 +4368,12 @@ static void add_annotation(int id, struct svalue *val)
 
   if (val) {
     if (Pike_compiler->new_program->annotations[id]) {
-      Pike_compiler->new_program->annotations[id] =
-	append_array(Pike_compiler->new_program->annotations[id], val);
+      multiset_add(Pike_compiler->new_program->annotations[id], val);
     } else {
       push_svalue(val);
-      Pike_compiler->new_program->annotations[id] = aggregate_array(1);
+      f_aggregate_multiset(1);
+      Pike_compiler->new_program->annotations[id] = Pike_sp[-1].u.multiset;
+      Pike_sp--;
     }
   }
 }
@@ -4300,10 +4412,12 @@ static void add_program_annotation(int inh, struct svalue *val)
   }
   if (val) {
     if (inherit->annotations) {
-      inherit->annotations = append_array(inherit->annotations, val);
+      multiset_add(inherit->annotations, val);
     } else {
       push_svalue(val);
-      inherit->annotations = aggregate_array(1);
+      f_aggregate_multiset(1);
+      inherit->annotations = Pike_sp[-1].u.multiset;
+      Pike_sp--;
     }
   }
 }
@@ -4467,30 +4581,40 @@ struct program *end_first_pass(int finish)
 
   if (!Pike_compiler->num_parse_error) {
     prog = Pike_compiler->new_program;
+    /* NB: Need referenced msnodes! */
     if (prog->inherits->annotations) {
-      struct array *a = prog->inherits->annotations;
-      for (e = 0; e < a->size; e++) {
+      struct multiset *l = prog->inherits->annotations;
+      ptrdiff_t pos;
+      /* NB: multiset_first() adds an msnode_ref. */
+      for (pos = multiset_first(l); pos >= 0; pos = multiset_next(l, pos)) {
 	struct object *o;
 	struct program *p;
 	struct inherit *inh;
 	int fun;
-	if (TYPEOF(ITEM(a)[e]) != PIKE_T_OBJECT) continue;
-	o = ITEM(a)[e].u.object;
-	p = o->prog;
-	if (!p) continue;
-	inh = p->inherits + SUBTYPEOF(ITEM(a)[e]);
-	p = inh->prog;
-	fun = find_identifier("end_pass", p);
-	if (fun < 0) continue;
-	fun += inh->identifier_level;
-	push_int(Pike_compiler->compiler_pass);
-	ref_push_program(prog);
-	ref_push_object_inherit(Pike_fp->current_object,
-				Pike_fp->context -
-				Pike_fp->current_program->inherits);
-	safe_apply_low2(o, fun, 3, NULL);
+	push_multiset_index(l, pos);
+	if (TYPEOF(Pike_sp[-1]) == PIKE_T_OBJECT) {
+	  o = Pike_sp[-1].u.object;
+	  p = o->prog;
+	  if (p) {
+	    inh = p->inherits + SUBTYPEOF(Pike_sp[-1]);
+	    p = inh->prog;
+	    fun = find_identifier("end_pass", p);
+	    if (fun >= 0) {
+	      fun += inh->identifier_level;
+	      push_int(Pike_compiler->compiler_pass);
+	      ref_push_program(prog);
+	      ref_push_object_inherit(Pike_fp->current_object,
+				      Pike_fp->context -
+				      Pike_fp->current_program->inherits);
+	      safe_apply_low2(o, fun, 3, NULL);
+	      pop_stack();
+	    }
+	  }
+	}
 	pop_stack();
       }
+      /* Remove the msnode_ref added by multiset_first(). */
+      sub_msnode_ref(l);
     }
   }
 
@@ -4617,9 +4741,9 @@ struct program *end_first_pass(int finish)
 
 
   CDFPRINTF("th(%ld) %p end_first_pass(%d): "
-            "lock_depth:%d, compilation_depth:%d\n",
+            "compilation_depth:%d\n",
             (long)th_self(), prog, finish,
-            lock_depth, c->compilation_depth);
+            c->compilation_depth);
 
   c->compilation_depth--;
 
@@ -5211,65 +5335,6 @@ void lower_inherit(struct program *p,
 	      "(resolver problem).");
     }
 
-    /* Restore annotations (if any) to and from the inherited program. */
-    if (p->inherits->annotations) {
-      struct inherit *src_inh = p->inherits;
-      struct inherit *dst_inh =
-	Pike_compiler->new_program->inherits + inherit_offset;
-      struct array *annotations;
-      int found_inh = 0;
-      int e;
-
-      dst_inh->annotations = annotations = copy_array(src_inh->annotations);
-      for (e = 0; e < annotations->size; e++) {
-	if (TYPEOF(ITEM(annotations)[e]) == PIKE_T_OBJECT) {
-	  /* FIXME: Subtyped objects? */
-	  struct object *ann = ITEM(annotations)[e].u.object;
-	  if (ann->prog && ann->prog->inherits[0].annotations) {
-	    /* Check if it has the @Inherited annotation. */
-	    struct array *a = ann->prog->inherits[0].annotations;
-	    int is_inherited = 0;
-	    int ee;
-	    for (ee = 0; ee < a->size; ee++) {
-	      if ((TYPEOF(ITEM(a)[ee]) == PIKE_T_OBJECT) &&
-		  (ITEM(a)[ee].u.object == Inherited_annotation)) {
-		is_inherited = 1;
-		break;
-	      }
-	    }
-	    if (is_inherited) {
-	      found_inh++;
-	      add_program_annotation(0, &(ITEM(annotations)[e]));
-
-	      /* Switch out the annotation with a placeholding marker,
-	       * so that we can perform the filtering (if any)
-	       * more efficiently below.
-	       *
-	       * We use the Inherited_annotation object
-	       * as the placeholding marker.
-	       */
-	      SET_SVAL(ITEM(annotations)[e], PIKE_T_OBJECT, 0,
-		       object, Inherited_annotation);
-	      add_ref(Inherited_annotation);
-	      free_object(ann);
-	    }
-	  }
-	}
-      }
-      if (found_inh) {
-	if (found_inh == annotations->size) {
-	  free_array(annotations);
-	  dst_inh->annotations = NULL;
-	} else {
-	  ref_push_object(Inherited_annotation);
-	  dst_inh->annotations =
-	    subtract_array_svalue(annotations, Pike_sp - 1);
-	  pop_stack();
-	  free_array(annotations);
-	}
-      }
-    } while(0);
-
     if (Pike_compiler->compiler_pass == COMPILER_PASS_EXTRA) {
       return;
     }
@@ -5396,55 +5461,45 @@ void lower_inherit(struct program *p,
       }
 
       if (inherit.annotations) {
-	struct array *annotations;
-	int e;
-	int found_inh = 0;
-	inherit.annotations = annotations = copy_array(inherit.annotations);
-	for (e = 0; e < annotations->size; e++) {
-	  if (TYPEOF(ITEM(annotations)[e]) == PIKE_T_OBJECT) {
-	    /* FIXME: Subtyped objects? */
-	    struct object *ann = ITEM(annotations)[e].u.object;
-	    if (ann->prog && ann->prog->inherits[0].annotations) {
-	      /* Check if it has the @Inherited annotation. */
-	      struct array *a = ann->prog->inherits[0].annotations;
-	      int is_inherited = 0;
-	      int ee;
-	      for (ee = 0; ee < a->size; ee++) {
-		if ((TYPEOF(ITEM(a)[ee]) == PIKE_T_OBJECT) &&
-		    (ITEM(a)[ee].u.object == Inherited_annotation)) {
-		  is_inherited = 1;
-		  break;
-		}
-	      }
-	      if (is_inherited) {
-		found_inh++;
-		add_program_annotation(0, &(ITEM(annotations)[e]));
+	struct multiset *annotations;
+	union msnode *node = low_multiset_first(inherit.annotations->msd);
+	int keep_annotations = 0;
 
-		/* Switch out the annotation with a placeholding marker,
-		 * so that we can perform the filtering (if any)
-		 * more efficiently below.
-		 *
-		 * We use the Inherited_annotation object
-		 * as the placeholding marker.
-		 */
-		add_ref(ITEM(annotations)[e].u.object = Inherited_annotation);
-		free_object(ann);
+	inherit.annotations = annotations = copy_multiset(inherit.annotations);
+
+	ref_push_object(Inherited_annotation);
+
+	while(node) {
+	  if (TYPEOF(node->i.ind) != T_DELETED) {
+	    low_push_multiset_index(node);
+	    if (TYPEOF(Pike_sp[-1]) == PIKE_T_OBJECT) {
+	      /* FIXME: Subtyped objects? */
+	      struct object *ann = Pike_sp[-1].u.object;
+	      if (ann->prog && ann->prog->inherits[0].annotations) {
+		/* Check if it has the @Inherited annotation. */
+		struct multiset *l = ann->prog->inherits[0].annotations;
+		if (multiset_lookup(l, Pike_sp-2)) {
+		  add_program_annotation(0, Pike_sp-1);
+
+		  multiset_delete(annotations, Pike_sp-1);
+		} else {
+		  keep_annotations = 1;
+		}
+	      } else {
+		keep_annotations = 1;
 	      }
+	    } else {
+	      keep_annotations = 1;
 	    }
-	  }
-	}
-	if (found_inh) {
-	  if (found_inh == annotations->size) {
-	    free_array(annotations);
-	    inherit.annotations = NULL;
-	  } else {
-	    ref_push_object(Inherited_annotation);
-	    inherit.annotations =
-	      subtract_array_svalue(annotations, Pike_sp - 1);
 	    pop_stack();
-	    free_array(annotations);
 	  }
+	  node = low_multiset_next(node);
 	}
+	if (!keep_annotations) {
+	  free_multiset(annotations);
+	  inherit.annotations = NULL;
+	}
+	pop_stack();
       }
     }else{
       if(!inherit.parent)
@@ -5806,7 +5861,8 @@ void compiler_do_inherit(node *n,
       pop_stack();
   }
 
-  if (Pike_compiler->current_annotations) {
+  if (Pike_compiler->current_annotations &&
+      (Pike_compiler->compiler_pass == COMPILER_PASS_FIRST)) {
     compiler_add_program_annotations(inherit_offset,
 				     Pike_compiler->current_annotations);
     free_node(Pike_compiler->current_annotations);
@@ -6142,6 +6198,7 @@ int define_variable(struct pike_string *name,
       struct reference *ref = PTR_FROM_INT(Pike_compiler->new_program, n);
       struct identifier *id = ID_FROM_PTR(Pike_compiler->new_program, ref);
 
+#if 0
       if (Pike_compiler->current_annotations) {
 	compiler_add_annotations(ref->identifier_offset,
 				 Pike_compiler->current_annotations);
@@ -6149,6 +6206,7 @@ int define_variable(struct pike_string *name,
 	free_node(Pike_compiler->current_annotations);
 	Pike_compiler->current_annotations = NULL;
       }
+#endif /* 0 */
 
       free_type(id->type);
       copy_pike_type(id->type, type);
@@ -6406,6 +6464,7 @@ PMOD_EXPORT int add_constant(struct pike_string *name,
       struct reference *ref = PTR_FROM_INT(Pike_compiler->new_program, n);
       struct identifier *id = ID_FROM_PTR(Pike_compiler->new_program, ref);
 
+#if 0
       if (Pike_compiler->current_annotations) {
 	compiler_add_annotations(ref->identifier_offset,
 				 Pike_compiler->current_annotations);
@@ -6413,6 +6472,7 @@ PMOD_EXPORT int add_constant(struct pike_string *name,
 	free_node(Pike_compiler->current_annotations);
 	Pike_compiler->current_annotations = NULL;
       }
+#endif /* 0 */
 
       if (IDENTIFIER_IS_ALIAS(id->identifier_flags)) {
 	/* FIXME: We probably ought to do something here... */
@@ -6929,6 +6989,7 @@ INT32 define_function(struct pike_string *name,
 
     if(!(ref.id_flags & ID_INHERITED)) /* not inherited */
     {
+#if 0
       if (Pike_compiler->current_annotations) {
 	compiler_add_annotations(ref.identifier_offset,
 				 Pike_compiler->current_annotations);
@@ -6936,6 +6997,7 @@ INT32 define_function(struct pike_string *name,
 	free_node(Pike_compiler->current_annotations);
 	Pike_compiler->current_annotations = NULL;
       }
+#endif /* 0 */
 
       if( !( IDENTIFIER_IS_FUNCTION(funp->identifier_flags) &&
 	     ( (!func || func->offset == -1) || (funp->func.offset == -1))))
@@ -7716,7 +7778,7 @@ int store_prog_string(struct pike_string *str)
   return Pike_compiler->new_program->num_strings-1;
 }
 
-/* NOTE: O(n²)! */
+/* NOTE: O(nï¿½)! */
 int store_constant(const struct svalue *foo,
 		   int equal,
 		   struct pike_string *UNUSED(constant_name))
@@ -7933,7 +7995,7 @@ struct array *program_inherit_annotations(struct program *p)
       push_undefined();
     }
     if (inh->annotations) {
-      ref_push_array(inh->annotations);
+      ref_push_multiset(inh->annotations);
       f_add(2);
       found = 1;
     }
@@ -7973,18 +8035,18 @@ struct array *program_annotations(struct program *p, int flags)
 	struct reference *ref = PTR_FROM_INT(p, e);
 	struct program *p2 = PROG_FROM_PTR(p, ref);
 	struct svalue *val = &p2->constants[id->func.const_info.offset].sval;
-	struct array *inh_ann = NULL;
+	struct multiset *inh_ann = NULL;
 	if ((TYPEOF(*val) != T_PROGRAM) ||
 	    !(val->u.program->flags & PROGRAM_USES_PARENT)) {
 	  if (inherit_annotations &&
 	      (TYPEOF(ITEM(inherit_annotations)[ref->inherit_offset]) ==
-	       PIKE_T_ARRAY)) {
-	    inh_ann = ITEM(inherit_annotations)[ref->inherit_offset].u.array;
-	    ref_push_array(inh_ann);
+	       PIKE_T_MULTISET)) {
+	    inh_ann = ITEM(inherit_annotations)[ref->inherit_offset].u.multiset;
+	    ref_push_multiset(inh_ann);
 	  }
 	  if ((p2->num_annotations > ref->identifier_offset) &&
 	      p2->annotations[ref->identifier_offset]) {
-	    ref_push_array(p2->annotations[ref->identifier_offset]);
+	    ref_push_multiset(p2->annotations[ref->identifier_offset]);
 	    if (inh_ann) {
 	      f_add(2);
 	    }
@@ -8000,6 +8062,7 @@ struct array *program_annotations(struct program *p, int flags)
       }
     }
   }
+  do_free_array(inherit_annotations);
   f_aggregate(n);
   res = Pike_sp[-1].u.array;
   add_ref(res);
@@ -8116,6 +8179,12 @@ int program_index_no_free(struct svalue *to, struct svalue *what,
  * Filename entry:
  *   1. char		127 (marker).
  *   2. small number	Filename entry number in string table.
+ *
+ * Frame variable:
+ *   1. char		127 (marker).
+ *   2. small number	~(frame stack offset).
+ *   3. char		0: name, 1: type, 2:end
+ *   4. small number	name: strings_offset, type: constants_offset, end: -
  *
  * Line number entry:
  *   1. small number	Index in program.program (pc).
@@ -8388,6 +8457,29 @@ void store_linenumber(INT_TYPE current_line, struct pike_string *current_file)
   }
 }
 
+void store_linenumber_frame_name(int frame_offset, int string_num)
+{
+  add_to_linenumbers(127);
+  insert_small_number(~frame_offset);
+  add_to_linenumbers(0);
+  insert_small_number(string_num);
+}
+
+void store_linenumber_frame_type(int frame_offset, int constant_num)
+{
+  add_to_linenumbers(127);
+  insert_small_number(~frame_offset);
+  add_to_linenumbers(1);
+  insert_small_number(constant_num);
+}
+
+void store_linenumber_frame_end(int frame_offset)
+{
+  add_to_linenumbers(127);
+  insert_small_number(~frame_offset);
+  add_to_linenumbers(2);
+}
+
 #define FIND_PROGRAM_LINE(prog, file, line) do {			\
     char *pos = prog->linenumbers;					\
     file = NULL;							\
@@ -8570,6 +8662,11 @@ PMOD_EXPORT ptrdiff_t low_get_offset_for_line (
 		   //printf("new file\n");
 	  	   strno = get_small_number(&cnt);
 	  	   CHECK_FILE_ENTRY (prog, strno);
+	  	   if(strno < 0) {
+	  	       cnt++;
+               get_small_number(&cnt);
+	  	       continue; // variable entry
+	  	   }
 	 	   file = prog->strings[strno];
 		   if(file == fname) {
                      //printf("Right file, right time\n");
@@ -8583,8 +8680,8 @@ PMOD_EXPORT ptrdiff_t low_get_offset_for_line (
 		}
 		
 		off+=get_small_number(&cnt);
-                line+=get_small_number(&cnt);
-				printf("line: %d %p\n", line, off);
+        line+=get_small_number(&cnt);
+		printf("line: %d %p\n", line, off);
 		
 		if(wanted_file && line == linep) { printf("found offset for line %d: %p.\n", linep, off); gotoff = off; }
       }
@@ -8599,7 +8696,8 @@ PMOD_EXPORT ptrdiff_t low_get_offset_for_line (
 
 PMOD_EXPORT struct pike_string *low_get_line (PIKE_OPCODE_T *pc,
 					      struct program *prog,
-					      INT_TYPE *linep)
+					      INT_TYPE *linep,
+					      struct local_variable_info *vars)
 {
   linep[0] = 0;
 
@@ -8612,6 +8710,7 @@ PMOD_EXPORT struct pike_string *low_get_line (PIKE_OPCODE_T *pc,
       static ptrdiff_t off;
       static INT32 pid;
       static INT_TYPE line;
+      static struct local_variable_info frame;
 
       if(prog->linenumbers == base && prog->id == pid && offset > off &&
 	 cnt < prog->linenumbers + prog->num_linenumbers)
@@ -8621,6 +8720,7 @@ PMOD_EXPORT struct pike_string *low_get_line (PIKE_OPCODE_T *pc,
       off=line=0;
       pid=prog->id;
       file = 0;
+      frame.num_local = 0;
 
       while(cnt < prog->linenumbers + prog->num_linenumbers)
       {
@@ -8629,8 +8729,39 @@ PMOD_EXPORT struct pike_string *low_get_line (PIKE_OPCODE_T *pc,
 	  int strno;
 	  cnt++;
 	  strno = get_small_number(&cnt);
-	  CHECK_FILE_ENTRY (prog, strno);
-	  next_file = prog->strings[strno];
+	  if (strno >= 0) {
+	    CHECK_FILE_ENTRY (prog, strno);
+	    next_file = prog->strings[strno];
+	  } else {
+	    int frame_offset = ~strno;
+	    int kind = *cnt++;
+	    if (kind == 2) {
+	      /* end of frame */
+	      frame.num_local = frame_offset;
+	      continue;
+	    }
+	    strno = get_small_number(&cnt);
+	    frame.num_local = frame_offset+1;
+	    if (frame_offset < MAX_LOCAL) {
+	      switch(kind) {
+	      case 0:	/* name */
+		frame.names[frame_offset] = strno;
+		break;
+	      case 1:	/* type */
+		frame.types[frame_offset] = strno;
+		break;
+#ifdef PIKE_DEBUG
+	      default:
+		Pike_fatal("Unknown linenumber entry: %d\n", kind);
+		break;
+#endif
+	      }
+#ifdef PIKE_DEBUG
+	    } else {
+	      Pike_fatal("Frame offset out of range: %d\n", frame_offset);
+#endif
+	    }
+	  }
 	  continue;
 	}
 	off+=get_small_number(&cnt);
@@ -8646,6 +8777,7 @@ PMOD_EXPORT struct pike_string *low_get_line (PIKE_OPCODE_T *pc,
 	base = NULL;
       }
       linep[0]=line;
+      if (vars) *vars = frame;
       if (file) {
 	add_ref(file);
 	return file;
@@ -8742,7 +8874,7 @@ PMOD_EXPORT struct pike_string *get_line(PIKE_OPCODE_T *pc,
     return unknown_program;
   }
 
-  res = low_get_line(pc, prog, linep);
+  res = low_get_line(pc, prog, linep, NULL);
   if (!res) {
     struct pike_string *not_found;
     REF_MAKE_CONST_STRING(not_found, "Line not found");
@@ -8774,7 +8906,7 @@ PMOD_EXPORT struct pike_string *low_get_function_line (struct object *o,
     }
     if (IDENTIFIER_IS_PIKE_FUNCTION(id->identifier_flags) &&
 	(id->func.offset != -1))
-      return low_get_line (p->program + id->func.offset, p, linep);
+      return low_get_line (p->program + id->func.offset, p, linep, NULL);
     if ((ret = get_identifier_line(o->prog, fun, linep))) {
       add_ref(ret);
       return ret;
@@ -9073,7 +9205,7 @@ void gc_mark_program_as_referenced(struct program *p)
 	  gc_mark_program_as_referenced(p->inherits[e].prog);
 
 	if (p->inherits[e].annotations)
-	  gc_mark_array_as_referenced(p->inherits[e].annotations);
+	  gc_mark_multiset_as_referenced(p->inherits[e].annotations);
       }
 
 #if defined (PIKE_DEBUG) || defined (DO_PIKE_CLEANUP)
@@ -9083,7 +9215,7 @@ void gc_mark_program_as_referenced(struct program *p)
 
       for (e = p->num_annotations-1; e >= 0; e--) {
 	if (p->annotations[e])
-	  gc_mark_array_as_referenced(p->annotations[e]);
+	  gc_mark_multiset_as_referenced(p->annotations[e]);
       }
     } GC_LEAVE;
 }
@@ -9107,12 +9239,12 @@ void real_gc_cycle_check_program(struct program *p, int weak)
 	  gc_cycle_check_program(p->inherits[e].prog, 0);
 
 	if (p->inherits[e].annotations)
-	  gc_cycle_check_array(p->inherits[e].annotations, 0);
+	  gc_cycle_check_multiset(p->inherits[e].annotations, 0);
       }
 
       for (e = p->num_annotations - 1; e >= 0; e--) {
 	if (p->annotations[e])
-	  gc_cycle_check_array(p->annotations[e], 0);
+	  gc_cycle_check_multiset(p->annotations[e], 0);
       }
 
       /* Strong ref follows. It must be last. */
@@ -9281,13 +9413,13 @@ size_t gc_free_all_unreferenced_programs(void)
 	}
 
 	if (p->inherits[e].annotations) {
-	  free_array(p->inherits[e].annotations);
+	  free_multiset(p->inherits[e].annotations);
 	  p->inherits[e].annotations = NULL;
 	}
       }
 
       for (e = 0; e < p->num_annotations; e++) {
-	do_free_array(p->annotations[e]);
+	do_free_multiset(p->annotations[e]);
 	p->annotations[e] = NULL;
       }
 

@@ -878,7 +878,8 @@ static inline void low_debug_instr_prologue (PIKE_INSTR_T instr)
         printf("pro: %p, %p %p, %p\n", bp_prog, Pike_fp->context->prog, bp_offset, Pike_fp->pc - Pike_fp->context->prog->program);
     }
 */	
-			
+		
+
 	/* This block performs the actual breakpoint/step behavior */
 	if((IS_THREAD_STEPPING(th_state)) || (bp = Pike_fp->context->prog->breakpoints) != NULL ) {
 		INT_TYPE linep;
@@ -914,14 +915,18 @@ static inline void low_debug_instr_prologue (PIKE_INSTR_T instr)
 			    Pike_error("Could not get debugger for breakpoint.\n");
  		      }
 
-  		      assign_svalue(&debugger_server, Pike_sp-1);
+		  // TODO check we actually got the memory.
+		  debugger_server = *(struct svalue *)malloc(sizeof(struct svalue));
+		  
+		  assign_svalue_no_free((&debugger_server), Pike_sp-1);
+		  add_ref_svalue(&debugger_server);
 
-		      pop_stack();
-		      pop_stack();
-		    }
+		  pop_stack();
+		  pop_stack();
+		}
+  	    
+		filep = get_line(Pike_fp->pc,Pike_fp->context->prog,&linep);
 
-	    filep = get_line(Pike_fp->pc,Pike_fp->context->prog,&linep);
-		
 		ref_push_string(filep);
 		push_int(linep);
 		push_text(get_opcode_name(instr));
@@ -933,8 +938,9 @@ static inline void low_debug_instr_prologue (PIKE_INSTR_T instr)
 		// we don't want to step though any of the do_breakpoint() instructions that actually wake up the debugger.
 		// this seems safe for the basic scenario, but perhaps we should do this on another thread altogether?
    	    th_state->stepping_mode = 0;
-		safe_apply_svalue(&debugger_server, 5, 1);
 
+		safe_apply_svalue(&debugger_server, 5, 1);
+		//printf("applied\n");
 		if(TYPEOF(*(Pike_sp - 1)) != T_INT) 
 		{
 		  pop_stack();
@@ -946,7 +952,7 @@ static inline void low_debug_instr_prologue (PIKE_INSTR_T instr)
 
 		if(debug_retval == 1) // single_step
 		{
-  	  	  th_state->stepping_mode = 1;		
+  	  	  th_state->stepping_mode = 1;
 		} else {
 	  	  th_state->stepping_mode = 0;
 		}
@@ -3076,6 +3082,7 @@ int apply_low_safe_and_stupid(struct object *o, INT32 offset)
   int p_flags = prog->flags;
   LOW_JMP_BUF *saved_jmpbuf;
   int fun = -1;
+  int save_compiler_pass = Pike_compiler->compiler_pass;
 
   /* Search for a function that belongs to the current program,
    * since this is needed for opcodes that use INHERIT_FROM_*
@@ -3088,17 +3095,21 @@ int apply_low_safe_and_stupid(struct object *o, INT32 offset)
     }
   }
 
-  if (use_dummy_reference &&
-      /* NB: add_to_*() are only valid in the first pass! */
-      (Pike_compiler->compiler_pass == COMPILER_PASS_FIRST) &&
-      (Pike_compiler->new_program == prog)) {
+#ifdef PIKE_DEBUG
+  if (Pike_compiler->new_program != prog) {
+    Pike_fatal("Invalid use of apply_low_save_and_stupid().\n");
+  }
+#endif /* PIKE_DEBUG */
+
+  /* NB: add_to_*() are only valid in the first pass! */
+  Pike_compiler->compiler_pass = COMPILER_PASS_FIRST;
+  if (use_dummy_reference) {
     /* No suitable function was found, so add one. */
     struct identifier dummy;
     struct reference dummy_ref = {
       0, 0, ID_HIDDEN,
       PIKE_T_UNKNOWN, { 0, },
     };
-    /* FIXME: Assert that o->prog == Pike_compiler->new_program */
     copy_shared_string(dummy.name, empty_pike_string);
     copy_pike_type(dummy.type, function_type_string);
     dummy.filename_strno = -1;
@@ -3111,10 +3122,6 @@ int apply_low_safe_and_stupid(struct object *o, INT32 offset)
     add_to_identifiers(dummy);
     fun = prog->num_identifier_references;
     add_to_identifier_references(dummy_ref);
-  } else if (use_dummy_reference) {
-    /* FIXME: Hope that we don't have any F_EXTERN et al. */
-    fun = 0;
-    use_dummy_reference = 0;
   }
 
   /* FIXME: Is this up-to-date with mega_apply? */
@@ -3162,6 +3169,7 @@ int apply_low_safe_and_stupid(struct object *o, INT32 offset)
   UNSETJMP(tmp);
 
   Pike_interpreter.catching_eval_jmpbuf = saved_jmpbuf;
+  Pike_compiler->compiler_pass = save_compiler_pass;
 
   if (use_dummy_reference) {
     /* Pop the dummy identifier. */

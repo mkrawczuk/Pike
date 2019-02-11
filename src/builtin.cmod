@@ -2,6 +2,7 @@
 || This file is part of Pike. For copyright information see COPYRIGHT.
 || Pike is distributed under GPL, LGPL and MPL. See the file COPYING
 || for more information.
+|| $Id$
 */
 
 #include "global.h"
@@ -1851,18 +1852,20 @@ PIKEFUN int(8 .. 8)|int(16 .. 16)|int(32 .. 32) string_width(string s)
   RETURN 8 * (1 << s->size_shift);
 }
 
-/*! @decl mixed m_delete(object|mapping map, mixed index)
+/*! @decl mixed m_delete(object|mapping|multiset map, mixed index)
  *!
  *! If @[map] is an object that implements @[lfun::_m_delete()],
  *! that function will be called with @[index] as its single argument.
  *!
- *! Otherwise if @[map] is a mapping the entry with index @[index]
- *! will be removed from @[map] destructively.
+ *! Otherwise if @[map] is a mapping or multiset the entry with
+ *! index @[index] will be removed from @[map] destructively.
  *!
- *! If the mapping does not have an entry with index @[index], nothing is done.
+ *! If the mapping or multiset does not have an entry with
+ *! index @[index], nothing is done.
  *!
  *! @returns
- *!   The value that was removed will be returned.
+ *!   The value that was removed will be returned,
+ *!   and @expr{UNDEFINED@} otherwise.
  *!
  *! @note
  *!   Note that @[m_delete()] changes @[map] destructively.
@@ -1871,10 +1874,12 @@ PIKEFUN int(8 .. 8)|int(16 .. 16)|int(32 .. 32) string_width(string s)
  *!   @[mappingp()]
  */
 PMOD_EXPORT
-PIKEFUN mixed m_delete(object|mapping map, mixed index)
+PIKEFUN mixed m_delete(object|mapping|multiset map, mixed index)
   efun;
   optflags OPT_SIDE_EFFECT;
-  rawtype tOr(tFunc(tMap(tSetvar(0,tMix),tSetvar(1,tMix)) tVar(0),tVar(1)),tFunc(tObj tMix,tMix))
+  rawtype tOr3(tFunc(tMap(tSetvar(0,tMix),tSetvar(1,tMix)) tVar(0),tVar(1)),
+	       tFunc(tSet(tSetvar(0,tMix)) tVar(0),tInt01),
+	       tFunc(tObj tMix,tMix));
 {
   struct program *p;
   if( TYPEOF(*map) == T_MAPPING )
@@ -1897,28 +1902,83 @@ PIKEFUN mixed m_delete(object|mapping map, mixed index)
 	      id + p->inherits[SUBTYPEOF(*map)].identifier_level, 1);
     stack_swap();
     pop_stack();
+  } else if (TYPEOF(*map) == T_MULTISET) {
+    struct svalue s;
+    multiset_delete_2(map->u.multiset, index, &s);
+    pop_n_elems(args);
+    *Pike_sp = s;
+    Pike_sp++;
+    dmalloc_touch_svalue(Pike_sp-1);
   } else {
-    SIMPLE_ARG_TYPE_ERROR("m_delete", 1, "object|mapping");
+    SIMPLE_ARG_TYPE_ERROR("m_delete", 1, "object|mapping|multiset");
   }
 }
 
-/*! @decl void m_clear(mapping map)
+/*! @decl void m_clear(mapping|multiset|object map)
  *!
- *!   Clear the contents of a mapping.
+ *!   Clear the contents of a mapping or multiset.
  *!
- *!   This function clears the content of the mapping @[map] so
- *!   that it becomes empty. This is an atomic operation.
+ *!   This function clears the content of the mapping
+ *!   or multiset @[map] so that it becomes empty.
+ *!   This is an atomic operation.
+ *!
+ *!   If @[map] is an object @[lfun::_m_clear()] will be called
+ *!   in it.
  *!
  *! @seealso
  *!   @[m_delete()]
  */
 PMOD_EXPORT
-PIKEFUN void m_clear(mapping map)
-  efun
+PIKEFUN void m_clear(mapping|multiset|object map)
+  efun;
   optflags OPT_SIDE_EFFECT;
 {
-  /* FIXME: Add an LFUN__M_CLEAR analogous with LFUN__M_DELETE? */
-  clear_mapping(map);
+  struct program *p;
+  if (TYPEOF(*map) == PIKE_T_MAPPING) {
+    clear_mapping(map->u.mapping);
+  } else if (TYPEOF(*map) == PIKE_T_MULTISET) {
+    clear_multiset(map->u.multiset);
+  } else if ((TYPEOF(*map) == PIKE_T_OBJECT) && (p = map->u.object->prog)) {
+    int id = FIND_LFUN(p->inherits[SUBTYPEOF(*map)].prog, LFUN__M_CLEAR);
+    if( id == -1 ) {
+      SIMPLE_ARG_TYPE_ERROR("m_clear", 1, "object with lfun::_m_clear()");
+    }
+    apply_low(map->u.object,
+	      id + p->inherits[SUBTYPEOF(*map)].identifier_level, 0);
+    pop_stack();
+  } else {
+    SIMPLE_ARG_TYPE_ERROR("m_clear", 1, "mapping|multiset");
+  }
+  pop_n_elems(args);
+}
+
+/*! @decl void m_add(multiset|object l, mixed val)
+ *!
+ *!   Add a member to a multiset.
+ *!
+ *! @seealso
+ *!   @[m_delete()]
+ */
+PMOD_EXPORT
+PIKEFUN void m_add(multiset|object l, mixed val)
+  efun;
+  optflags OPT_SIDE_EFFECT;
+  rawtype tFunc(tSet(tSetvar(0, tMix)) tVar(0), tVoid);
+{
+  struct program *p;
+  if (TYPEOF(*l) == PIKE_T_MULTISET) {
+    multiset_add(l->u.multiset, val);
+  } else if ((TYPEOF(*l) == PIKE_T_OBJECT) && (p = l->u.object->prog)) {
+    int id = FIND_LFUN(p->inherits[SUBTYPEOF(*l)].prog, LFUN__M_ADD);
+    if( id == -1 ) {
+      SIMPLE_ARG_TYPE_ERROR("m_add", 1, "object with lfun::_m_add()");
+    }
+    apply_low(l->u.object,
+	      id + p->inherits[SUBTYPEOF(*l)].identifier_level, 1);
+  } else {
+    SIMPLE_ARG_TYPE_ERROR("m_add", 1, "multiset|object");
+  }
+  pop_n_elems(args);
 }
 
 /*! @decl int get_weak_flag(array|mapping|multiset m)
@@ -2207,6 +2267,47 @@ PIKECLASS RandomInterface
     THIS->buffer_bits = 64;
     pop_stack();
   }
+
+/*! @class FakeObject
+ *!
+ *! Used as a place holder in eg backtraces for objects that
+ *! are unsuitable to have references to in backtraces.
+ *!
+ *! Examples of such objects are instances of @[Thread.MutexKey],
+ *! and @[Nettle.Cipher.State].
+ *!
+ *! @seealso
+ *!   @[backtrace()]
+ */
+PIKECLASS FakeObject
+  program_flags PROGRAM_CONSTANT;
+{
+  PIKEVAR program prog flags ID_PRIVATE|ID_PROTECTED|ID_HIDDEN;
+
+  PIKEFUN void create(program|function|void prog)
+    flags ID_PROTECTED;
+  {
+    struct program *p = prog ? program_from_svalue(prog):NULL;
+    do_free_program(THIS->prog);
+    THIS->prog = p;
+    if (p) add_ref(p);
+  }
+
+  PIKEFUN string _sprintf(int c, mapping|void ignored)
+    flags ID_PROTECTED;
+  {
+    push_text("%O()");
+    if (THIS->prog) {
+      ref_push_program(THIS->prog);
+    } else {
+      ref_push_program(Pike_fp->current_program);
+    }
+    f_sprintf(2);
+  }
+}
+
+/*! @endclass
+ */
 
   /* Generates a number 0<=c<limit from random bits taken from the
      int_buffer. Follows the NIST SP800-90A method for converting bit
@@ -2658,6 +2759,54 @@ PIKEFUN void _putenv (string var, void|string val)
 /*! @module Pike
  */
 
+/*! @class FakeObject
+ *!
+ *! Used as a place holder in eg backtraces for objects that
+ *! are unsuitable to have references to in backtraces.
+ *!
+ *! Examples of such objects are instances of @[Thread.MutexKey],
+ *! and @[Nettle.Cipher.State].
+ *!
+ *! @seealso
+ *!   @[backtrace()]
+ */
+PIKECLASS FakeObject
+  program_flags PROGRAM_CONSTANT;
+{
+  PIKEVAR program prog flags ID_PRIVATE|ID_PROTECTED|ID_HIDDEN;
+
+  PIKEFUN void create(program|function|void prog)
+    flags ID_PROTECTED;
+  {
+    struct program *p = prog ? program_from_svalue(prog):NULL;
+    do_free_program(THIS->prog);
+    THIS->prog = p;
+    if (p) add_ref(p);
+  }
+
+  PIKEFUN string _sprintf(int c, mapping|void ignored)
+    flags ID_PROTECTED;
+  {
+    push_text("%O()");
+    if (THIS->prog) {
+      ref_push_program(THIS->prog);
+    } else {
+      ref_push_program(Pike_fp->current_program);
+    }
+    f_sprintf(2);
+  }
+}
+
+/*! @endclass
+ */
+
+static struct object *clone_fake_object(struct program *p)
+{
+  if (p) ref_push_program(p);
+  else push_undefined();
+  return clone_object(FakeObject_program, 1);
+}
+
 /*! @class BacktraceFrame
  */
 
@@ -2668,6 +2817,10 @@ PIKECLASS backtrace_frame
   PIKEVAR program oprog flags ID_PROTECTED|ID_PRIVATE;
 #endif
   PIKEVAR array args;
+  PIKEVAR array vars;
+
+  PIKEVAR array _var_names flags ID_PROTECTED|ID_PRIVATE;
+  PIKEVAR array _var_types flags ID_PROTECTED|ID_PRIVATE;
 
   /* These are cleared when filename and lineno have been initialized
    * from them, unless keep_pc is set. */
@@ -2771,14 +2924,16 @@ PIKECLASS backtrace_frame
     RETURN (t == literal_array_string);
   }
 
-  static void fill_in_file_and_line()
+  static void fill_in_file_and_line(int with_var_info)
   {
     struct pike_string *file = NULL;
-    assert (THIS->lineno == 0);
+    struct local_variable_info vars = { {0,}, {0, }, 0 };
+    assert ((THIS->lineno == 0) || with_var_info);
 
     if (THIS->pc && THIS->prog) {
-      file = low_get_line(THIS->pc, THIS->prog, &THIS->lineno);
-      if((THIS->fp) == NULL) THIS->pc = NULL;
+      file = low_get_line(THIS->pc, THIS->prog, &THIS->lineno,
+			  with_var_info?&vars:NULL);
+      THIS->pc = NULL;
     }
     else if (TYPEOF(THIS->_fun) == PIKE_T_FUNCTION) {
 #ifdef PIKE_DEBUG
@@ -2802,10 +2957,64 @@ PIKECLASS backtrace_frame
       else free_string (file);
     }
 
-    if (THIS->prog && ((THIS->fp) == NULL)) {
-      free_program(THIS->prog);
-      THIS->prog = NULL;
+    if (with_var_info) {
+      int i;
+      struct array *names = allocate_array(vars.num_local);
+      struct array *types = allocate_array(vars.num_local);
+
+      if (THIS->prog) {
+	for (i = 0; i < vars.num_local; i++) {
+	  SET_SVAL(ITEM(names)[i], PIKE_T_STRING, 0,
+		   string, THIS->prog->strings[vars.names[i]]);
+	  add_ref(ITEM(names)[i].u.string);
+	  assign_svalue_no_free(ITEM(types) + i,
+				&THIS->prog->constants[vars.types[i]].sval);
+	}
+      }
+      THIS->_var_names = names;
+      THIS->_var_types = types;
+
+      if (THIS->prog) {
+	free_program(THIS->prog);
+	THIS->prog = NULL;
+      }
     }
+  }
+
+  PIKEFUN string `filename()
+  {
+    if (!THIS->lineno) {
+      fill_in_file_and_line(0);
+    }
+    if (THIS->filename) {
+      ref_push_string(THIS->filename);
+      return;
+    }
+    push_undefined();
+  }
+
+  PIKEFUN string `line()
+  {
+    if (!THIS->lineno) {
+      fill_in_file_and_line(0);
+    }
+    push_int(THIS->lineno);
+  }
+
+  PIKEFUN array `->var_names()
+  {
+    if (!THIS->_var_names) {
+      fill_in_file_and_line(1);
+    }
+    ref_push_array(THIS->_var_names);
+  }
+
+  PIKEFUN array `->var_types()
+  {
+    if (!THIS->_var_types) {
+      fill_in_file_and_line(1);
+    }
+    ref_push_array(THIS->_var_types);
   }
   
   /*! @decl string _sprintf(int c, mapping|void opts)
@@ -2822,7 +3031,7 @@ PIKECLASS backtrace_frame
 
     push_static_text("backtrace_frame(");
 
-    if (THIS->lineno == 0) fill_in_file_and_line();
+    if (THIS->lineno == 0) fill_in_file_and_line(0);
 
     if (THIS->filename) {
       ref_push_string(THIS->filename);
@@ -2925,14 +3134,14 @@ PIKECLASS backtrace_frame
     for (i = index; i <= end; i++) {
       switch(i) {
       case 0:	/* Filename */
-        if (THIS->lineno == 0) fill_in_file_and_line();
+        if (THIS->lineno == 0) fill_in_file_and_line(0);
 	if (THIS->filename)
 	  ref_push_string(THIS->filename);
 	else
 	  push_int(0);
 	break;
       case 1:	/* Linenumber */
-        if (THIS->lineno == 0) fill_in_file_and_line();
+        if (THIS->lineno == 0) fill_in_file_and_line(0);
 	push_int(THIS->lineno);
 	break;
       case 2:	/* Function */
@@ -2981,7 +3190,7 @@ PIKECLASS backtrace_frame
 
     switch(index) {
     case 0:	/* Filename */
-      if (THIS->lineno == 0) fill_in_file_and_line();
+      if (THIS->lineno == 0) fill_in_file_and_line(0);
       if (TYPEOF(*value) != PIKE_T_STRING) {
 	if ((TYPEOF(*value) != PIKE_T_INT) ||
 	    (value->u.integer)) {
@@ -3001,14 +3210,14 @@ PIKECLASS backtrace_frame
       break;
 
     case 1:	/* Linenumber */
-      if (THIS->lineno == 0) fill_in_file_and_line();
+      if (THIS->lineno == 0) fill_in_file_and_line(0);
       if (TYPEOF(*value) != PIKE_T_INT)
 	SIMPLE_ARG_TYPE_ERROR("`[]=", 2, "int(1..)");
       THIS->lineno = value->u.integer;
       break;
 
     case 2:	/* Function */
-      if (THIS->lineno == 0) fill_in_file_and_line();
+      if (THIS->lineno == 0) fill_in_file_and_line(0);
       assign_svalue(&THIS->_fun, value);
       break;
     default:	/* Arguments */
@@ -3152,8 +3361,8 @@ void low_low_backtrace(struct Pike_interpreter_struct *i, int keep_pc)
     }
 
     if (f->locals) {
-      INT32 numargs = (INT32) MINIMUM(f->num_args,
-                                      stack_top - f->locals);
+      INT32 numlocals = (INT32)(stack_top - f->locals);
+      INT32 numargs = (INT32) MINIMUM(f->num_args, numlocals);
       INT32 varargs = 0;
 
       if(of && of->locals) {
@@ -3164,9 +3373,11 @@ void low_low_backtrace(struct Pike_interpreter_struct *i, int keep_pc)
 	 *  /arne
 	 * */
 
+        numlocals = (INT32)MINIMUM(numlocals, of->locals - f->locals);
         numargs = (INT32)MINIMUM(f->num_args,of->locals - f->locals);
       }
 
+      numlocals = MAXIMUM(numlocals, 0);
       numargs = MAXIMUM(numargs, 0);
 
       /* Handle varargs... */
@@ -3174,6 +3385,33 @@ void low_low_backtrace(struct Pike_interpreter_struct *i, int keep_pc)
 	  (f->locals + numargs < stack_top) &&
 	  (TYPEOF(f->locals[numargs]) == T_ARRAY)) {
 	varargs = f->locals[numargs].u.array->size;
+      }
+
+      if (numlocals) {
+	bf->vars = allocate_array_no_init(numlocals, 0);
+	bf->vars->type_field =
+	  assign_svalues_no_free(bf->vars->item, f->locals,
+				 numlocals, BIT_MIXED);
+	if (bf->vars->type_field & BIT_OBJECT) {
+	  ptrdiff_t i;
+	  for (i = 0; i < bf->vars->size; i++) {
+	    /* FIXME: What about arrays of objects (eg varargs). */
+	    struct svalue *s = ITEM(bf->vars) + i;
+	    if ((TYPEOF(*s) == T_OBJECT) &&
+		s->u.object->prog &&
+		(s->u.object->prog->flags &
+		 (PROGRAM_DESTRUCT_IMMEDIATE|PROGRAM_CLEAR_STORAGE))) {
+	      /* It is typically a bad idea to have extra references
+	       * to objects with these flags. The flags are usually
+	       * used by stuff like mutex keys and encryption keys
+	       * respectively.
+	       */
+	      struct object *o = clone_fake_object(s->u.object->prog);
+	      free_object(s->u.object);
+	      SET_SVAL(*s, T_OBJECT, 0, object, o);
+	    }
+	  }
+	}
       }
 
       if (numargs + varargs) {
@@ -3185,6 +3423,25 @@ void low_low_backtrace(struct Pike_interpreter_struct *i, int keep_pc)
 	    assign_svalues_no_free(bf->args->item + numargs,
 				   f->locals[numargs].u.array->item,
 				   varargs, BIT_MIXED);
+	}
+	if (bf->args->type_field & BIT_OBJECT) {
+	  ptrdiff_t i;
+	  for (i = 0; i < bf->args->size; i++) {
+	    struct svalue *s = ITEM(bf->args) + i;
+	    if ((TYPEOF(*s) == T_OBJECT) &&
+		s->u.object->prog &&
+		(s->u.object->prog->flags &
+		 (PROGRAM_DESTRUCT_IMMEDIATE|PROGRAM_CLEAR_STORAGE))) {
+	      /* It is typically a bad idea to have extra references
+	       * to objects with these flags. The flags are usually
+	       * used by stuff like mutex keys and encryption keys
+	       * respectively.
+	       */
+	      struct object *o = clone_fake_object(s->u.object->prog);
+	      free_object(s->u.object);
+	      SET_SVAL(*s, T_OBJECT, 0, object, o);
+	    }
+	  }
 	}
       }
     }

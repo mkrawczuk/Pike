@@ -121,6 +121,8 @@ enum LFUN {
     LFUN_RPOW,
     LFUN__SQRT,
     LFUN__ANNOTATIONS,
+    LFUN__M_CLEAR,
+    LFUN__M_ADD,
 };
 
 extern const char *const lfun_names[];
@@ -518,7 +520,7 @@ struct inherit
    * For inherits at higher levels they are copied verbatim from their
    * previous program.
    */
-  struct array *annotations;
+  struct multiset *annotations;
 };
 
 /**
@@ -532,7 +534,7 @@ struct inherit
 #define INHERIT_ALL	-3	/* All inherits but not self. */
 
 
-
+/* PROGRAM_* flags. Currently INT16. */
 
 /* program parts have been realloced into one block */
 #define PROGRAM_OPTIMIZED 1
@@ -692,6 +694,13 @@ struct program
 #include "program_areas.h"
 
   INT16 lfuns[NUM_LFUNS];
+};
+
+struct local_variable_info
+{
+  int names[MAX_LOCAL];	/* Offset in strings. */
+  int types[MAX_LOCAL];	/* Offset in constants. */
+  int num_local;	/* Number of entries in either of the above. */
 };
 
 PMOD_EXPORT void dump_program_tables (const struct program *p, int indent);
@@ -991,6 +1000,9 @@ void ext_store_program_line (struct program *prog, INT_TYPE line,
 			     struct pike_string *file);
 void start_line_numbering(void);
 void store_linenumber(INT_TYPE current_line, struct pike_string *current_file);
+void store_linenumber_frame_name(int frame_offset, int string_num);
+void store_linenumber_frame_type(int frame_offset, int constant_num);
+void store_linenumber_frame_end(int frame_offset);
 PMOD_EXPORT struct pike_string *low_get_program_line(struct program *prog,
 						     INT_TYPE *linep);
 PMOD_EXPORT struct pike_string *get_program_line(struct program *prog,
@@ -1000,7 +1012,8 @@ PMOD_EXPORT char *low_get_program_line_plain (struct program *prog,
 					      int malloced);
 PMOD_EXPORT struct pike_string *low_get_line(PIKE_OPCODE_T *pc,
 					     struct program *prog,
-					     INT_TYPE *linep);
+					     INT_TYPE *linep,
+					     struct local_variable_info *vars);
 PMOD_EXPORT char *low_get_line_plain (PIKE_OPCODE_T *pc, struct program *prog,
 				      INT_TYPE *linep, int malloced);
 PMOD_EXPORT struct pike_string *get_line(PIKE_OPCODE_T *pc,
