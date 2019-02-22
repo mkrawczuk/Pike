@@ -2,19 +2,25 @@
 #define DEFAULT_PORT 3333
 
 import .Protocol;
-array(mixed) global_bt = backtrace();
+array(mixed) stackinfo;
 bool debug = true;
 bool im_a_server = true;
 Stdio.Buffer obuf = Stdio.Buffer();
 
-int frameId;
+// TODO: pack this into a nice class
+int var_ref_ct;
+mapping (int(1..):array(mixed)) vars_in_frame;
 
 void write_event(ProtocolMessage msg, bool|void violently) {
     string msg_str = encode_message(msg);
 
     DEBUG("\nSending event: \n%s\n", msg_str);
 
-    if (im_a_server) if (violently) breakpoint_client->write(msg_str); else obuf->add(msg_str);
+    if (im_a_server)
+        if (violently)
+            breakpoint_client->write(msg_str);
+        else
+            obuf->add(msg_str);
     else obuf->write(msg_str);
 }
 
@@ -54,7 +60,7 @@ void handle_attach_request(mixed msg) {
 
 void handle_continue_request(mixed msg) {
     object key;
-    handle_request_generic(msg);
+    handle_request_generic(msg); // TODO
     DEBUG("Resuming.\n");
 	set_mode(CONTINUE);
 
@@ -85,7 +91,7 @@ void handle_launch_request(mixed msg) {
 
 void handle_evaluate_request(mixed msg) {
     EvaluateRequest req = EvaluateRequest(msg);
-    Response res = Response();
+    Response res = EvaluateResponse();
 
     res->request_seq = req->seq;
     res->success = 1;
@@ -114,6 +120,7 @@ void handle_threads_request(mixed msg) {
 }
 
 void handle_configuration_done_request(mixed msg) {
+    // TODO
     Request req = Request(msg);
     Response res = Response();
 
@@ -129,52 +136,160 @@ void handle_configuration_done_request(mixed msg) {
 }
 
 void handle_stack_trace_request(mixed msg) {
-    Request req = Request(msg);
-    Response res = Response();
+    Request req = StackTraceRequest(msg);
+    Response res = StackTraceResponse();
 
     res->request_seq = req->seq;
     res->success = 1;
-    res->command = req->command;
-
     array(mapping(string:mixed)) frames = ({});
-    foreach(global_bt, mixed frame) {
+    int frameId;
+
+    var_ref_ct = 0;
+    vars_in_frame = ([]);
+
+    if (stackinfo) {
+        foreach(stackinfo, mixed frame) {
+            frames += ({
+                ([
+                    "id" : frameId++,
+                    "line": frame[1],
+                    "column": 0,
+                    "name": sprintf("%O", frame[2]),
+                    "source": ([
+                        "path": frame[0],
+                        "name": (frame[0] / "/")[-1]
+                        ])
+                ])
+            });
+        }
+    }
+    else {
+        // seems like VSCode doesn't handle empty stack trace properly
+        // that's why this dummy frame is added
         frames += ({
             ([
-                "id" : frameId++,
-                "line": frame[1],
+                "id" : 0,
+                "line": 0,
                 "column": 0,
-                "name": sprintf("%O", frame[2]),
-                "source": ([
-                    "path": frame[0],
-                    "name": (frame[0] / "/")[-1]
-                    ])
+                "name": "dummy frame"
             ])
         });
     }
-    frames = reverse(frames);
     res->body = ([
-        "stackFrames" : frames
+        "stackFrames" : frames,
+        "totalFrames" : sizeof(frames)
     ]);
 
     write_response(res);
 }
 
 void handle_scopes_request(mixed msg) {
-    Request req = Request(msg);
-    Response res = Response();
-
+    Request req = ScopesRequest(msg);
+    Response res = ScopesResponse();
+    int frame_id = req->arguments->frame_id;
     res->request_seq = req->seq;
     res->success = 1;
-    res->command = req->command;
+
+    array(mixed) vars_in_scope = ({});
+    mixed frame = stackinfo[frame_id];
+
+    for (int i = 0; i < sizeof(frame->var_names); ++i) {
+        vars_in_scope += ({
+            ({
+                frame->var_types[i],
+                frame->var_names[i],
+                frame->vars[i]
+            })
+        });
+    }
+
+    vars_in_frame += ([++var_ref_ct : vars_in_scope]);
+
     res->body = ([
         "scopes" : ({
             ([
-                "name" : "scope name",
-                "variableReference" : "variable reference",
+                "name" : "Current scope",
+                "variablesReference" : var_ref_ct,
                 "expensive" : false
             ])
         })
     ]);
+
+    write_response(res);
+}
+
+void handle_variables_request(mixed msg) {
+    Request req = VariablesRequest(msg);
+    Response res = VariablesResponse();
+
+    int var_ref = req->arguments->variables_reference;
+
+    array(mapping(string:mixed)) vars = ({});
+    array(mixed) members = vars_in_frame[var_ref];
+
+    foreach(members, mixed var) {
+        // count var ref for complex types
+        int new_var_ref = 0;
+        array children = ({});
+        if (arrayp(var[2]) || mappingp(var[2]) || multisetp(var[2]) || objectp(var[2])) {
+            new_var_ref = ++var_ref_ct;
+            // mapping and object shouldn't be trated identically
+            // probably it's a reason for the backtrace frame bug
+            if (mappingp(var[2]) || objectp(var[2])) {
+                foreach(indices(var[2]), mixed v) {
+                    children += ({
+                        ({
+                            _typeof(var[2][v]),
+                            v,
+                            var[2][v]
+                        })
+                    });
+                }
+            }
+            else if (arrayp(var[2])) {
+                int idx;
+                foreach(var[2], mixed v) {
+                    children += ({
+                        ({
+                            _typeof(v),
+                            (string) idx++,
+                            v
+                        })
+                    });
+                }
+            }
+            else if (multisetp(var[2])) {
+                int idx;
+                foreach(indices(var[2]), mixed v) {
+                    children += ({
+                        ({
+                            _typeof(v),
+                            (string) idx++,
+                            v
+                        })
+                    });
+                }
+            }
+            vars_in_frame += ([
+                new_var_ref : children
+            ]);
+        }
+        vars += ({
+            ([
+                "type" : sprintf("%O", var[0]),
+                "name" : callablep(var[1]) ? sprintf("%O", var[1]): var[1],
+                "value" : new_var_ref? "" : sprintf("%O", var[2]),
+                "variablesReference" : new_var_ref,
+            ])
+        });
+    }
+
+    res->request_seq = req->seq;
+    res->success = 1;
+    res->body = ([
+        "variables" : vars
+    ]);
+
     write_response(res);
 }
 
@@ -188,13 +303,13 @@ void handle_action_request(mixed msg) {
 }
 
 void handle_breakpoints_request(mixed msg) {
+  // TODO
   string path = msg->arguments->source->path;
   array(int) lines = msg->arguments->lines;
   foreach(lines, int line) {
     object bp = Debug.Debugger.add_breakpoint(path, line);
     bp->enable();
   }
-
     Request req = Request(msg);
     Response res = Response();
 
@@ -233,7 +348,7 @@ object breakpoint_hilfe;
 object bpbe;
 object bpbet;
 
-int mode = .BreakpointHilfe.CONTINUE; 
+int mode = .BreakpointHilfe.CONTINUE;
 
 public void set_mode(int m) {
 	mode = m;
@@ -250,11 +365,11 @@ public void load_breakpoint(int wait_seconds)
     breakpoint_port = Stdio.Port(breakpoint_port_no, handle_breakpoint_client);
     breakpoint_port->set_backend(bpbe);
 	Debug.Debugger.set_debugger(this);
-	
+
 	// wait of -1 is infinite
-	if(wait_seconds > 0) 
+	if(wait_seconds > 0)
   	  bpbe->call_out(wait_timeout, wait_seconds);
-	  
+
 	if(wait_seconds != 0) {
 		werror("waiting up to " + wait_seconds + " for debugger to connect\n");
 	    object key = wait_lock->lock();
@@ -275,7 +390,13 @@ public int do_breakpoint(string file, int line, string opcode, object current_ob
 {
   if(!breakpoint_client) return 0;
 
-  global_bt = bt;
+  stackinfo = copy_value(reverse(bt[1..]));
+
+  // the object needs to be 'touched' in this scope, else it's optimized-out
+  foreach(stackinfo, mixed frame) {
+      werror("\ndo_breakpoint %O %O %O\n", frame->var_names, frame->var_types, frame->vars);
+  }
+
   StoppedEvent evt = StoppedEvent();
   evt->body->reason = "breakpoint";
   evt->body->threadId = 1;
@@ -360,6 +481,9 @@ private void breakpoint_read(mixed id, string data)
             break;
         case "setBreakpoints":
             handle_breakpoints_request(msg);
+            break;
+        case "variables":
+            handle_variables_request(msg);
             break;
         default:
             handle_request_generic(msg);

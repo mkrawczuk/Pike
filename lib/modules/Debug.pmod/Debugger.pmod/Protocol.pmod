@@ -23,7 +23,7 @@ string encode_message(ProtocolMessage msg) {
 // Debug Adapter Protocol
 //
 
-class JsonEncodable() {
+class JsonEncodable {
     protected mapping(string:mixed) to_json();
 
     string encode_json() {
@@ -549,7 +549,7 @@ class Capabilities {
     }
 
     protected mapping(string:mixed) to_json() {
-        return 
+        return
         ([
             // "additionalModuleColumns" : additional_module_columns,
             // "exceptionBreakpointFilters" : exception_breakpoint_filters,
@@ -633,7 +633,7 @@ class ExceptionBreakpointsFilter {
     }
 
     protected mapping(string:mixed) to_json() {
-        return 
+        return
         ([
             "default" : is_default,
             "filter" : filter,
@@ -754,6 +754,8 @@ class EvaluateRequest {
 
 // Arguments for 'evaluate' request.
 class EvaluateArguments {
+    inherit JsonEncodable;
+
     mixed  context;    // json: "context"
     string expression; // json: "expression"
     mixed  format;     // json: "format"
@@ -774,7 +776,7 @@ class EvaluateArguments {
             "context" : context,
             "expression" : expression,
             "format" : format,
-            "frameId" : frame_id,    
+            "frameId" : frame_id,
         ]);
     }
 }
@@ -793,6 +795,159 @@ class EvaluateResponse {
     }
 }
 
+// The request returns the variable scopes for a given stackframe ID.
+class ScopesRequest {
+    inherit Request;
+
+    ScopesArguments arguments; // json: "arguments"
+
+    protected void create(mixed|void json) {
+        if (json) {
+            ::create(json);
+            arguments = ScopesArguments(json["arguments"]);
+        } else {
+            ::create();
+            arguments = ScopesArguments();
+        }
+
+        command = "scopes";
+    }
+
+    protected mapping(string:mixed) to_json() {
+        mapping(string:mixed) json = ::to_json();
+        json += ([
+            "arguments" : arguments,
+        ]);
+
+        return json;
+    }
+}
+
+// Arguments for 'scopes' request.
+class ScopesArguments {
+    inherit JsonEncodable;
+
+    int frame_id;
+
+    protected void create(mixed|void json) {
+        if (!json) return;
+
+        frame_id = json["frameId"];
+    }
+
+    protected mapping(string:mixed) to_json() {
+        return
+        ([
+            "frameId" : frame_id
+        ]);
+    }
+}
+
+// Response to 'scopes' request.
+class ScopesResponse {
+    inherit Response;
+
+    protected void create(mixed|void json) {
+        if (json) {
+            ::create(json);
+            body = json["body"];
+        }
+        else {
+            ::create();
+            body = ([ "scopes" : 0 ]);
+        }
+
+        command = "scopes";
+    }
+}
+
+// The request returns a stacktrace from the current execution state.
+class StackTraceRequest {
+    inherit Request;
+
+    StackTraceArguments arguments; // json: "arguments"
+
+    protected void create(mixed|void json) {
+        if (json) {
+            ::create(json);
+            arguments = StackTraceArguments(json["arguments"]);
+        } else {
+            ::create();
+            arguments = StackTraceArguments();
+        }
+
+        command = "stackTrace";
+    }
+
+    protected mapping(string:mixed) to_json() {
+        mapping(string:mixed) json = ::to_json();
+        json += ([
+            "arguments" : arguments,
+        ]);
+
+        return json;
+    }
+}
+
+// Arguments for 'stackTrace' request.
+class StackTraceArguments {
+    inherit JsonEncodable;
+
+    StackFrameFormat    format;      // json: "format"
+    int                 levels;      // json: "levels"
+    int                 start_frame; // json: "startFrame"
+    int                 thread_id;   // json: "threadId"
+
+    protected void create(mixed|void json) {
+        if (!json) return;
+
+        format = StackFrameFormat(json["format"]);
+        levels = json["levels"];
+        start_frame = json["startFrame"];
+        thread_id = json["threadId"];
+    }
+
+    protected mapping(string:mixed) to_json() {
+        return
+        ([
+            "format" : format,
+            "levels" : levels,
+            "startFrame" : start_frame,
+            "threadId" : thread_id,
+        ]);
+    }
+}
+
+// Response to 'stackTrace' request.
+class StackTraceResponse {
+    inherit Response;
+
+    protected void create(mixed|void json) {
+        if (json) {
+            ::create(json);
+            body = json["body"];
+        }
+        else ::create();
+
+        command = "stackTrace";
+    }
+}
+
+// The request retrieves a list of all threads.
+class ThreadsRequest {
+    inherit Request;
+
+    protected void create(mixed|void json) {
+        if (json) {
+            ::create(json);
+        } else {
+            ::create();
+        }
+
+        command = "threads";
+    }
+}
+
 // Response to 'threads' request.
 class ThreadsResponse {
     inherit Response;
@@ -805,6 +960,81 @@ class ThreadsResponse {
         else ::create();
 
         command = "threads";
+    }
+}
+
+// Retrieves all child variables for the given variable reference.
+// An optional filter can be used to limit the fetched children to either named or indexed
+// children.
+class VariablesRequest {
+    inherit Request;
+
+    VariablesArguments arguments; // json: "arguments"
+
+    protected void create(mixed|void json) {
+        if (json) {
+            ::create(json);
+            arguments = VariablesArguments(json["arguments"]);
+        } else {
+            ::create();
+            arguments = VariablesArguments();
+        }
+
+        command = "variables";
+    }
+
+    protected mapping(string:mixed) to_json() {
+        mapping(string:mixed) json = ::to_json();
+        json += ([
+            "arguments" : arguments,
+        ]);
+    }
+}
+
+// Arguments for 'variables' request.
+class VariablesArguments {
+    inherit JsonEncodable;
+
+    int         count;               // json: "count"
+    string      filter;              // json: "filter"
+    ValueFormat format;              // json: "format"
+    int         start;               // json: "start"
+    int         variables_reference; // json: "variablesReference"
+
+    protected void create(mixed|void json) {
+        if (!json) return;
+
+        count = json["count"];
+        filter = json["filter"];
+        format = ValueFormat(json["format"]);
+        start = json["start"];
+        variables_reference = json["variablesReference"];
+    }
+
+    protected mapping(string:mixed) to_json() {
+        return
+        ([
+            "count" : count,
+            "filter" : filter,
+            "format" : format,
+            "start" : start,
+            "variablesReference" : variables_reference,
+        ]);
+    }
+}
+
+// Response to 'variables' request.
+class VariablesResponse {
+    inherit Response;
+
+    protected void create(mixed|void json) {
+        if (json) {
+            ::create(json);
+            body = json["body"];
+        }
+        else ::create();
+
+        command = "variables";
     }
 }
 
@@ -835,7 +1065,7 @@ class Breakpoint {
     }
 
     protected mapping(string:mixed) to_json() {
-        return 
+        return
         ([
             "column" : column,
             "endColumn" : end_column,
@@ -956,6 +1186,52 @@ class Module {
     }
 }
 
+// A Scope is a named container for variables. Optionally a scope can map to a source or a
+// range within a source.
+class Scope {
+    int     column;              // json: "column"
+    int     end_column;          // json: "endColumn"
+    int     end_line;            // json: "endLine"
+    bool    expensive;           // json: "expensive"
+    int     indexed_variables;   // json: "indexedVariables"
+    int     line;                // json: "line"
+    string  name;                // json: "name"
+    int     named_variables;     // json: "namedVariables"
+    Source  source;              // json: "source"
+    int     variables_reference; // json: "variablesReference"
+
+    protected void create(mixed|void json) {
+        if (!json) return;
+
+        column = json["column"];
+        end_column = json["endColumn"];
+        end_line = json["endLine"];
+        expensive = json["expensive"];
+        indexed_variables = json["indexedVariables"];
+        line = json["line"];
+        name = json["name"];
+        named_variables = json["namedVariables"];
+        source = Source(json["source"]);
+        variables_reference = json["variablesReference"];
+    }
+
+    protected mapping(string:mixed) to_json() {
+        return
+        ([
+            "column" : column,
+            "endColumn" : end_column,
+            "endLine" : end_line,
+            "expensive" : expensive,
+            "indexedVariables" : indexed_variables,
+            "line" : line,
+            "name" : name,
+            "namedVariables" : named_variables,
+            "source" : source,
+            "variablesReference" : variables_reference,
+        ]);
+    }
+}
+
 // A Source is a descriptor for source code. It is returned from the debug adapter as part
 // of a StackFrame and it is used by clients when specifying breakpoints.
 class Source {
@@ -984,7 +1260,7 @@ class Source {
     }
 
     protected mapping(string:mixed) to_json() {
-        return 
+        return
         ([
             "adapterData" : adapter_data,
             "checksums" : checksums,
@@ -994,6 +1270,144 @@ class Source {
             "presentationHint" : presentation_hint,
             "sourceReference" : source_reference,
             "sources" : sources,
+        ]);
+    }
+}
+
+// Specifies how the resulting value should be formatted.
+class ValueFormat {
+    inherit JsonEncodable;
+
+    bool hex; // json: "hex"
+
+    protected void create(mixed|void json) {
+        if (!json) return;
+
+        hex = json["hex"];
+    }
+
+    protected mapping(string:mixed) to_json() {
+        return
+        ([
+            "hex" : hex,
+        ]);
+    }
+}
+
+// Provides formatting information for a stack frame.
+class StackFrameFormat {
+    inherit ValueFormat;
+
+    bool include_all;      // json: "includeAll"
+    bool line;             // json: "line"
+    bool module;           // json: "module"
+    bool parameter_names;  // json: "parameterNames"
+    bool parameters;       // json: "parameters"
+    bool parameter_types;  // json: "parameterTypes"
+    bool parameter_values; // json: "parameterValues"
+
+    protected void create(mixed|void json) {
+        if (json) {
+            ::create(json);
+            include_all = json["includeAll"];
+            line = json["line"];
+            module = json["module"];
+            parameter_names = json["parameterNames"];
+            parameters = json["parameters"];
+            parameter_types = json["parameterTypes"];
+            parameter_values = json["parameterValues"];
+        } else {
+            ::create();
+        }
+    }
+
+    protected mapping(string:mixed) to_json() {
+        mapping(string:mixed) json = ::to_json();
+        json += ([
+            "includeAll" : include_all,
+            "line" : line,
+            "module" : module,
+            "parameterNames" : parameter_names,
+            "parameters" : parameters,
+            "parameterTypes" : parameter_types,
+            "parameterValues" : parameter_values,
+        ]);
+    }
+}
+
+// A Variable is a name/value pair.
+// Optionally a variable can have a 'type' that is shown if space permits or when hovering
+// over the variable's name.
+// An optional 'kind' is used to render additional properties of the variable, e.g.
+// different icons can be used to indicate that a variable is public or private.
+// If the value is structured (has children), a handle is provided to retrieve the children
+// with the VariablesRequest.
+// If the number of named or indexed children is large, the numbers should be returned via
+// the optional 'namedVariables' and 'indexedVariables' attributes.
+// The client can use this optional information to present the children in a paged UI and
+// fetch them in chunks.
+class Variable {
+    inherit JsonEncodable;
+
+    string                      evaluate_name;       // json: "evaluateName"
+    int                         indexed_variables;   // json: "indexedVariables"
+    string                      name;                // json: "name"
+    int                         named_variables;     // json: "namedVariables"
+    VariablePresentationHint    presentation_hint;   // json: "presentationHint"
+    string                      type;                // json: "type"
+    string                      value;               // json: "value"
+    int                         variables_reference; // json: "variablesReference"
+
+    protected void create(mixed|void json) {
+        if (!json) return;
+
+        evaluate_name = json["evaluateName"];
+        indexed_variables = json["indexedVariables"];
+        name = json["name"];
+        named_variables = json["namedVariables"];
+        presentation_hint = VariablePresentationHint(json["presentationHint"]);
+        type = json["type"];
+        value = json["value"];
+        variables_reference = json["variablesReference"];
+    }
+
+    protected mapping(string:mixed) to_json() {
+        return
+        ([
+            "evaluateName" : evaluate_name,
+            "indexedVariables" : indexed_variables,
+            "name" : name,
+            "namedVariables" : named_variables,
+            "presentationHint" : presentation_hint,
+            "type" : type,
+            "value" : value,
+            "variablesReference" : variables_reference,
+        ]);
+    }
+}
+
+// Properties of a value that can be used to determine how to render the result in the UI.
+class VariablePresentationHint {
+    inherit JsonEncodable;
+
+    array(string)   attributes; // json: "attributes"
+    string          kind;       // json: "kind"
+    string          visibility; // json: "visibility"
+
+    protected void create(mixed|void json) {
+        if (!json) return;
+
+        attributes = json["attributes"];
+        kind = json["kind"];
+        visibility = json["visibility"];
+    }
+
+    protected mapping(string:mixed) to_json() {
+        return
+        ([
+            "attributes" : attributes,
+            "kind" : kind,
+            "visibility" : visibility,
         ]);
     }
 }
