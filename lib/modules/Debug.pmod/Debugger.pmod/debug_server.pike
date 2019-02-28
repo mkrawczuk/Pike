@@ -6,6 +6,7 @@ array(mixed) stackinfo;
 bool debug = true;
 bool im_a_server = true;
 Stdio.Buffer obuf = Stdio.Buffer();
+bool attach = false;
 
 // TODO: pack this into a nice class
 int var_ref_ct;
@@ -38,6 +39,7 @@ void handle_initialize_request(mixed msg) {
     InitializeResponse res = InitializeResponse();
 
     res->body->supports_configuration_done_request = 1;
+    res->body->supports_set_variable = 1;
     res->request_seq = req->seq;
     res->success = 1;
 
@@ -55,6 +57,8 @@ void handle_attach_request(mixed msg) {
     res->request_seq = req->seq;
     res->success = 1;
 
+    attach = true;
+
     write_response(res);
 }
 
@@ -63,7 +67,6 @@ void handle_continue_request(mixed msg) {
     handle_request_generic(msg); // TODO
     DEBUG("Resuming.\n");
 	set_mode(CONTINUE);
-
     if(breakpoint_cond) {
         key = bp_lock->lock();
         breakpoint_cond->signal();
@@ -104,6 +107,7 @@ void handle_evaluate_request(mixed msg) {
 }
 
 void handle_threads_request(mixed msg) {
+    // TODO
     Request req = Request(msg);
     ThreadsResponse res = ThreadsResponse();
 
@@ -130,6 +134,9 @@ void handle_configuration_done_request(mixed msg) {
 
 
     write_response(res);
+
+    if (attach) return;
+
     StoppedEvent evt = StoppedEvent();
     evt->body = (["reason" : "entry", "threadId" : 1]);
     write_event(evt);
@@ -294,6 +301,7 @@ void handle_variables_request(mixed msg) {
 }
 
 void handle_action_request(mixed msg) {
+    // TODO
     handle_request_generic(msg);
 
     StoppedEvent evt = StoppedEvent();
@@ -306,9 +314,15 @@ void handle_breakpoints_request(mixed msg) {
   // TODO
   string path = msg->arguments->source->path;
   array(int) lines = msg->arguments->lines;
+  foreach(Debug.Debugger.breakpoints; object bp;) {
+      catch { bp->disable(); };
+  }
   foreach(lines, int line) {
-    object bp = Debug.Debugger.add_breakpoint(path, line);
-    bp->enable();
+    mixed e = catch {
+        object bp = Debug.Debugger.add_breakpoint(path, line);
+        werror("bp eable: %O\n", bp->enable());
+    };
+    werror("error: %O\n", e);
   }
     Request req = Request(msg);
     Response res = Response();
@@ -316,6 +330,26 @@ void handle_breakpoints_request(mixed msg) {
     res->request_seq = req->seq;
     res->success = 1;
     res->command = req->command;
+
+    write_response(res);
+}
+
+void handle_set_variable_request(mixed msg) {
+    // TODO
+    Request req = AttachRequest(msg);
+    Response res = Response();
+
+    res->request_seq = req->seq;
+    res->success = 1;
+    res->command = "setVariable";
+    res->body = ([]);
+    res->body->value = req->arguments->value;
+
+    string name = req->arguments->name;
+    int value = (int) req->arguments->value;
+    // TODO: frame_id instead
+    int var_idx = search(stackinfo[0]->var_names, name);
+    stackinfo[0]->set_local(var_idx, value);
 
     write_response(res);
 }
@@ -390,11 +424,11 @@ public int do_breakpoint(string file, int line, string opcode, object current_ob
 {
   if(!breakpoint_client) return 0;
 
-  stackinfo = copy_value(reverse(bt[1..]));
-
+  stackinfo = reverse(bt[1..]);
   // the object needs to be 'touched' in this scope, else it's optimized-out
+  Stdio.File fd = Stdio.File("/dev/null");
   foreach(stackinfo, mixed frame) {
-      werror("\ndo_breakpoint %O %O %O\n", frame->var_names, frame->var_types, frame->vars);
+      fd->write("%O %O %O", frame->var_names, frame->var_types, frame->vars);
   }
 
   StoppedEvent evt = StoppedEvent();
@@ -484,6 +518,9 @@ private void breakpoint_read(mixed id, string data)
             break;
         case "variables":
             handle_variables_request(msg);
+            break;
+        case "setVariable":
+            handle_set_variable_request(msg);
             break;
         default:
             handle_request_generic(msg);

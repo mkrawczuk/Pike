@@ -3897,7 +3897,17 @@ protected mixed main_resolv(string sym, CompatResolver|void resolver) {
 // callback for completing breakpoint registration for programs which weren't loaded
 // at the time of the breakpoint's creation.
 function deferred_breakpoint_completer;
-mixed program_loaded(string fn, mixed c) {if(deferred_breakpoint_completer) deferred_breakpoint_completer(fn, c); return c;}
+mapping(string:program) program_cache = ([]);
+
+mixed program_loaded(string fn, mixed c) {
+    if (programp(c))
+         program_cache[fn] = c;
+
+    if(deferred_breakpoint_completer)
+         deferred_breakpoint_completer(fn, c);
+
+     return c;
+}
 
 void load_debugger(int wait_seconds) {
    want_load_announcements = 1;
@@ -4144,7 +4154,7 @@ void _main(array(string(0..255)) orig_argv)
         exit(0);
 
       case "version":
-        exit(0, version() + " Copyright © 1994-2018 Linköping University\n"
+        exit(0, version() + " Copyright ï¿½ 1994-2018 Linkï¿½ping University\n"
             "Pike comes with ABSOLUTELY NO WARRANTY; This is free software and you are\n"
             "welcome to redistribute it under certain conditions; read the files\n"
             "COPYING and COPYRIGHT in the Pike distribution for more details.\n");

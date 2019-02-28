@@ -570,7 +570,7 @@ class Capabilities {
             // "supportsRestartFrame" : supports_restart_frame,
             // "supportsRestartRequest" : supports_restart_request,
             // "supportsSetExpression" : supports_set_expression,
-            // "supportsSetVariable" : supports_set_variable,
+             "supportsSetVariable" : supports_set_variable,
             // "supportsStepBack" : supports_step_back,
             // "supportsStepInTargetsRequest" : supports_step_in_targets_request,
             // "supportsTerminateRequest" : supports_terminate_request,
