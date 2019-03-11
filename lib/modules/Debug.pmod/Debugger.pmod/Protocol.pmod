@@ -673,13 +673,71 @@ class AttachRequest {
 // Response to 'attach' request. This is just an acknowledgement, so no body field is
 // required.
 class AttachResponse {
-        inherit Response;
+    inherit Response;
 
     protected void create(mixed|void json) {
         if (json) ::create(json);
         else ::create();
 
         command = "attach";
+    }
+}
+
+// The request starts the debuggee to run again.
+class ContinueRequest {
+    inherit Request;
+
+    ContinueArguments arguments; // these are implementation-specific. json: "arguments"
+
+    protected void create(mixed|void json) {
+        if (json) {
+            ::create(json);
+            arguments = json["arguments"];
+        }
+        else ::create();
+
+        command = "continue";
+    }
+
+    protected mapping(string:mixed) to_json() {
+        mapping(string:mixed) json = ::to_json();
+        json += ([
+            "arguments" : arguments,
+        ]);
+
+        return json;
+    }
+}
+
+// Arguments for 'continue' request.
+class ContinueArguments {
+    inherit JsonEncodable;
+
+    int thread_id; // json: threadId
+
+    protected void create(mixed|void json) {
+        if (!json) return;
+
+        thread_id = json["threadId"];
+    }
+
+    protected mapping(string:mixed) to_json() {
+        return
+        ([
+            "threadId" : thread_id,
+        ]);
+    }
+}
+
+// Response to 'continue' request.
+class ContinueResponse {
+    inherit Response;
+
+    protected void create(mixed|void json) {
+        if (json) ::create(json);
+        else ::create();
+
+        command = "continue";
     }
 }
 
@@ -858,6 +916,81 @@ class ScopesResponse {
         }
 
         command = "scopes";
+    }
+}
+
+// Set the variable with the given name in the variable container to a new value.
+class SetVariableRequest {
+    inherit Request;
+
+    SetVariableArguments arguments; // json: "arguments"
+
+    protected void create(mixed|void json) {
+        if (json) {
+            ::create(json);
+            arguments = SetVariableArguments(json["arguments"]);
+        } else {
+            ::create();
+            arguments = SetVariableArguments();
+        }
+
+        command = "setVariable";
+    }
+
+    protected mapping(string:mixed) to_json() {
+        mapping(string:mixed) json = ::to_json();
+        json += ([
+            "arguments" : arguments,
+        ]);
+
+        return json;
+    }
+}
+
+// Arguments for 'setVariable' request.
+class SetVariableArguments {
+    inherit JsonEncodable;
+
+    ValueFormat format;              // json: "format"
+    string      name;                // json: "name"
+    string      value;               // json: "value"
+    int         variables_reference; // json: "variablesReference"
+
+    protected void create(mixed|void json) {
+        if (!json) return;
+
+        format = json["format"];
+        name = json["name"];
+        value = json["value"];
+        variables_reference = json["variablesReference"];
+    }
+
+    protected mapping(string:mixed) to_json() {
+        return
+        ([
+            "format" : format,
+            "name" : name,
+            "value" : value,
+            "variablesReference" : variables_reference
+        ]);
+    }
+}
+
+// Response to 'setVariable' request.
+class SetVariableResponse {
+    inherit Response;
+
+    protected void create(mixed|void json) {
+        if (json) {
+            ::create(json);
+            body = json["body"];
+        }
+        else {
+            ::create();
+            body = ([ "value" : 0 ]);
+        }
+
+        command = "setVariable";
     }
 }
 

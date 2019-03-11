@@ -63,10 +63,16 @@ void handle_attach_request(mixed msg) {
 }
 
 void handle_continue_request(mixed msg) {
-    object key;
-    handle_request_generic(msg); // TODO
-    DEBUG("Resuming.\n");
+    ContinueRequest req = ContinueRequest(msg);
+    ContinueResponse res = ContinueResponse();
+
+    res->request_seq = req->seq;
+
 	set_mode(CONTINUE);
+    object key;
+
+    DEBUG("Resuming.\n");
+
     if(breakpoint_cond) {
         key = bp_lock->lock();
         breakpoint_cond->signal();
@@ -79,6 +85,11 @@ void handle_continue_request(mixed msg) {
         key = 0;
         wait_cond = 0;
     }
+
+    res->success = 1;
+
+    write_response(res);
+
 }
 
 
@@ -335,21 +346,18 @@ void handle_breakpoints_request(mixed msg) {
 }
 
 void handle_set_variable_request(mixed msg) {
-    // TODO
-    Request req = AttachRequest(msg);
-    Response res = Response();
+    Request req = SetVariableRequest(msg);
+    Response res = SetVariableResponse();
 
     res->request_seq = req->seq;
     res->success = 1;
-    res->command = "setVariable";
-    res->body = ([]);
-    res->body->value = req->arguments->value;
 
     string name = req->arguments->name;
     int value = (int) req->arguments->value;
     // TODO: frame_id instead
     int var_idx = search(stackinfo[0]->var_names, name);
     stackinfo[0]->set_local(var_idx, value);
+    res->body->value = req->arguments->value;
 
     write_response(res);
 }
