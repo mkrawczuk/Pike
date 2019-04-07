@@ -12,10 +12,13 @@ mapping program_cache = master()->program_cache;
 //!
 void deferred_breakpoint_completer(string filename, program prog) {
   if(!sizeof(breakpoints)) return;
-
   foreach(breakpoints; object bp;) {
     if(bp->is_deferred() && bp->get_filename() == filename)
-      bp->set_program(prog);
+      if (!bp->set_program(prog))
+        // try set_program on nested programs
+        foreach(indices(prog), string pname)
+          if(programp(prog[pname]) && bp->set_program(prog[pname]))
+            break;
   }
 }
 

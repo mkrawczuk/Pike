@@ -3,7 +3,7 @@
 
 import .Protocol;
 array(mixed) stackinfo;
-bool debug = true;
+bool debug = false;
 bool im_a_server = true;
 Stdio.Buffer obuf = Stdio.Buffer();
 bool attach = false;

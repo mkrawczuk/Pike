@@ -577,7 +577,6 @@ program p, string fname, string within_file, int line_number)
 	add_ref(within_file);
 }
 
-
   PIKEFUN program get_program() {
     if(THIS->prog)
       RETURN THIS->prog;
@@ -594,7 +593,6 @@ program p, string fname, string within_file, int line_number)
     RETURN THIS->within_fname;
   }
 
-  
   PIKEFUN int get_line_number() {
     RETURN THIS->line_number;
   }
@@ -610,8 +608,8 @@ program p, string fname, string within_file, int line_number)
   int low_enable_breakpoint() {
     ptrdiff_t offset;
     offset = low_get_offset_for_line(THIS->prog, THIS->within_fname, THIS->line_number);
-    if(offset < 0) return 0;
-//Pike_error("Unable to find offset of line number in program!\n");
+    if(offset <= 0) return 0;
+
 #ifdef PIKE_DEBUG
     struct debug_breakpoint * bp = malloc(sizeof(struct debug_breakpoint));
     if(!bp) Pike_fatal("Unable to allocate memory for breakpoint\n");
@@ -683,7 +681,7 @@ program p, string fname, string within_file, int line_number)
       THIS->want_enabled = 1;
       RETURN -1;
     }
-    low_enable_breakpoint();
+    if (!low_enable_breakpoint()) RETURN 0;
     RETURN 1;
 #else
   Pike_error("Cannot enable breakpoints if debug is not enabled.\n");
@@ -697,30 +695,35 @@ program p, string fname, string within_file, int line_number)
     THIS->enabled = 0;
   }
 
-  PIKEFUN void set_program(program prog) {
+  PIKEFUN int set_program(program prog) {
   
   // TODO it seems that entries for a given file in master()->programs can be set
   // multiple times, and that they are not always proper programs. we need to
   // attempt to understand that situation a little better. for now, this will weed
   // out attempts to set a program that we won't be able to look up an offset in.
-  if(!(prog->program)) {
-    printf("no program!\n");
-	return;
-  }
-
-  if(THIS->enabled) {
-    low_disable_breakpoint();
-    THIS->enabled = 0;
-  }
-
-  THIS->prog = prog;
-  add_ref(prog);
-  
-    if(THIS->want_enabled) {
-      if(!low_enable_breakpoint()) printf("unable to enable deferred breakpoint.\n");
-      THIS->want_enabled = 0;
+    if(!(prog->program)) {
+      printf("no program!\n");
+  	  RETURN 0;
     }
+
+    if(THIS->enabled) {
+      low_disable_breakpoint();
+      THIS->enabled = 0;
+    }
+
+    THIS->prog = prog;
+  
+    if(!low_enable_breakpoint())
+      RETURN 0;
+
+    add_ref(prog);
+
+    if(THIS->want_enabled)
+      THIS->want_enabled = 0;
+
+    RETURN 1;
   }
+
   INIT {
     THIS->prog = NULL;
     THIS->fname = NULL;
