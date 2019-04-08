@@ -3841,10 +3841,11 @@ void fix_type_field(node *n)
 	free_type(f);
 	if(n->token == F_AUTO_MAP)
 	{
+	  type_stack_mark();
 	  push_finished_type(n->type);
 	  push_type(T_ARRAY);
 	  free_type(n->type);
-	  n->type = pop_type();
+	  n->type = pop_unfinished_type();
 	}
 	break;
       }
@@ -3933,6 +3934,7 @@ void fix_type_field(node *n)
 
       if( t->type == PIKE_T_AUTO )
       {
+	type_stack_mark();
 	if( t->car != zero_type_string )
 	{
 	  /* Not the first one.. */
@@ -3947,7 +3949,7 @@ void fix_type_field(node *n)
 	}
 	push_type(PIKE_T_AUTO);
 	free_type( t );
-	t = pop_type();
+	t = pop_unfinished_type();
 	Pike_compiler->compiler_frame->current_return_type = t;
       } else {
 	node *retval = CAR(n);
@@ -4119,6 +4121,7 @@ void fix_type_field(node *n)
     break;
 
   case F_TYPEOF:
+    type_stack_mark();
     if (CAR(n)) {
       push_finished_type(CAR(n)->type);
     } else {
@@ -4126,7 +4129,7 @@ void fix_type_field(node *n)
     }
     push_type(T_TYPE);
     if (n->type) free_type(n->type);
-    n->type = pop_type();
+    n->type = pop_unfinished_type();
     break;
 
   case F_UNDEFINED:

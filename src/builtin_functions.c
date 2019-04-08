@@ -3636,7 +3636,7 @@ PMOD_EXPORT void f_crypt(INT32 args)
   }
 }
 
-/*! @decl void destruct(void|object o)
+/*! @decl int(1bit) destruct(void|object o)
  *!
  *!   Mark an object as destructed.
  *!
@@ -3645,16 +3645,21 @@ PMOD_EXPORT void f_crypt(INT32 args)
  *!
  *!   All pointers and function pointers to this object will become zero.
  *!   The destructed object will be freed from memory as soon as possible.
+ *!
+ *! @returns
+ *!   Returns @expr{1@} if @[o] has an @[lfun::_destruct()] that
+ *!   returned @expr{1@} and inhibited destruction.
  */
 PMOD_EXPORT void f_destruct(INT32 args)
 {
   struct object *o;
+  int ret;
   if(args)
   {
     if(TYPEOF(Pike_sp[-args]) != T_OBJECT) {
       if ((TYPEOF(Pike_sp[-args]) == T_INT) &&
 	  (!Pike_sp[-args].u.integer)) {
-	pop_n_elems(args);
+	pop_n_elems(args-1);
 	return;
       }
       SIMPLE_ARG_TYPE_ERROR("destruct", 1, "object");
@@ -3672,9 +3677,19 @@ PMOD_EXPORT void f_destruct(INT32 args)
   if (o->prog && o->prog->flags & PROGRAM_NO_EXPLICIT_DESTRUCT)
     PIKE_ERROR("destruct", "Object can't be destructed explicitly.\n",
 	       Pike_sp, args);
+  if (o->inhibit_destruct) {
+    /* Destruct the object as soon as the inhibit_destruct
+     * counter is back down to zero.
+     */
+    o->flags |= OBJECT_PENDING_DESTRUCT;
+    pop_n_elems(args);
+    push_int(1);
+    return;
+  }
   debug_malloc_touch(o);
-  destruct_object (o, DESTRUCT_EXPLICIT);
+  ret = destruct_object (o, DESTRUCT_EXPLICIT);
   pop_n_elems(args);
+  push_int(ret);
   destruct_objects_to_destruct();
 }
 
@@ -5253,7 +5268,7 @@ PMOD_EXPORT int callablep(struct svalue *s)
 	int i;
 	ret = 1;
 	for(i=0; i<a->size; i++)
-          if( TYPEOF(ITEM(a)[i])!=T_INT && !callablep(&ITEM(a)[i]) )
+	  if(!IS_UNDEFINED(ITEM(a) + i) && !callablep(&ITEM(a)[i]))
           {
             ret = 0;
             break;
@@ -5492,7 +5507,7 @@ void f_gc(INT32 args)
     break;
   default:
     pop_n_elems(args);
-    res = do_gc(NULL, 1);
+    res = do_gc(1);
     break;
   }
   push_int(res);
@@ -5830,7 +5845,7 @@ PMOD_EXPORT void f__verify_internals(INT32 args)
 #ifdef PIKE_DEBUG
   do_debug();			/* Calls do_gc() since d_flag > 3. */
 #else
-  do_gc(NULL, 1);
+  do_gc(1);
 #endif
   d_flag=tmp;
   pop_n_elems(args);
@@ -5921,6 +5936,11 @@ PMOD_EXPORT void f_gmtime(INT32 args)
                        "the timestamp %"PRINTINT64"d.\n", (INT64) t);
   pop_n_elems(args);
   encode_struct_tm(tm, 0);
+}
+
+static void my_putenv(void *s)
+{
+  putenv(s);
 }
 
 /*! @decl mapping(string:int) localtime(int timestamp)
@@ -6034,7 +6054,7 @@ time_t mktime_zone(struct tm *date, int other_timezone, int tz)
 	orig_tz = "TZ";
 #endif
       }
-      SET_ONERROR(uwp, putenv, orig_tz);
+      SET_ONERROR(uwp, my_putenv, orig_tz);
       /* NB: No need to call tzset(); mktime() will call it. */
       retval = mktime_zone(date, 0, 0);
       CALL_AND_UNSET_ONERROR(uwp);
@@ -9983,8 +10003,8 @@ void init_builtin_efuns(void)
   ADD_EFUN("crypt",f_crypt,
            tOr(tFunc(tOr(tStr,tVoid),tStr7),tFunc(tStr tStr,tInt01)),OPT_EXTERNAL_DEPEND);
 
-  /* function(object|void:void) */
-  ADD_EFUN("destruct",f_destruct,tFunc(tOr(tObj,tVoid),tVoid),OPT_SIDE_EFFECT);
+  /* function(object|void:int(0..1)) */
+  ADD_EFUN("destruct",f_destruct,tFunc(tOr(tObj,tVoid),tInt01),OPT_SIDE_EFFECT);
 
   ADD_EFUN("dirname", f_dirname, tFunc(tSetvar(0, tStr), tVar(0)), 0);
 

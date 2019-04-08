@@ -607,6 +607,15 @@ test_any_equal([[
   return values(B());
 ]], ({ 2 }))
 
+test_any_equal([[
+  // Test constant expression in inherit.
+  class A { constant sym = 1; }
+  class B { constant sym = 2; }
+  class C { inherit ([ "A":A, "B":B ])["A"]; }
+  class D { inherit ([ "A":A, "B":B ])["B"]; }
+  return ({ A, B, C, D })->sym;
+]], ({ 1, 2, 1, 2 }))
+
 dnl bug in for loop optimization in combination with +=
 
 test_any([[
@@ -1016,6 +1025,38 @@ test_compile_any([[
     protected void _destruct() {}
   }
 ]])
+
+test_any([[
+  // Test Pike.InhibitDestruct.
+  class Foo {
+    inherit Pike.InhibitDestruct;
+    /* Make the symbols visible outside. */
+    void inhibit_destruct() { ::inhibit_destruct(); }
+    void permit_destruct() { ::permit_destruct(); }
+  }
+  object o = Foo();
+  destruct(o);
+  if (o) return 1;
+
+  o = Foo();
+  o->inhibit_destruct();
+  o->permit_destruct();
+  if (!o) return 2;
+  destruct(o);
+  if (o) return 3;
+
+  o = Foo();
+  o->inhibit_destruct();
+  destruct(o);
+  if (!o) return 4;
+  o->inhibit_destruct();
+  if (!o) return 5;
+  o->permit_destruct();
+  if (!o) return 6;
+  o->permit_destruct();
+  if (o) return 7;
+  return 0;
+]], 0)
 
 test_any([[
   class Foo {
@@ -3320,6 +3361,16 @@ test_any([[
   add_constant("A");
   return 0;
 ]], 0)
+
+test_any_equal([[
+  // Test automap combined with splice. [LysLysKOM 23258037]
+  array ret = ({});
+  for (int x = 0; x < 10; x++) {
+    array a = ({ x, });
+    ret += `+(a[*], @a);
+  }
+  return ret;
+]], ({ 0, 2, 4, 6, 8, 10, 12, 14, 16, 18 }))
 
 test_any([[
   // Test eval_low() on seemingly constant expressions, that
@@ -11601,26 +11652,30 @@ test_callablep(String.Buffer, 1)
 test_callablep( class { void `()() { } }(), 1)
 test_callablep(String.Buffer(), 0)
 test_callablep( ({}), 1 )
-test_callablep( ({ 0,0 }), 1 )
-test_callablep( ({ 0,1 }), 1 )
+test_callablep( ({ 0,0 }), 0 )
+test_callablep( ({ 0,1 }), 0 )
+test_callablep( ({ UNDEFINED, UNDEFINED }), 1 )
+test_callablep( ({ UNDEFINED,1 }), 0 )
 test_callablep( ({ time }), 1 )
-test_callablep( ({ time, 0 }), 1 )
+test_callablep( ({ time, UNDEFINED }), 1 )
 test_callablep( ({ "a", time }), 0 )
 test_callablep( ({ "" }), 0 )
 test_callablep( "", 0 )
 test_callablep( 3.14, 0 )
 test_callablep( (< time >), 0 )
 test_callablep( 0, 0 )
+test_callablep( UNDEFINED, 0 )
 test_callablep( 7, 0 )
-test_callablep( ({ ({ 0, 1, time }) }), 1 )
+test_callablep( ({ ({ 0, 1, time }) }), 0 )
+test_callablep( ({ ({ UNDEFINED, time }) }), 1 )
 test_callablep( ({ ({ 0, "" }) }), 0 )
 test_any([[
-  array a = ({ 0, 0 });
+  array a = ({ UNDEFINED, UNDEFINED });
   a[1] = a;
   return callablep(a);
 ]], 1)
 test_any([[
-  array a = ({ 0, 0 });
+  array a = ({ UNDEFINED, UNDEFINED });
   a[1] = a;
   return equal(a(), a);
 ]], 1)
@@ -13946,6 +14001,16 @@ array a()
 
 test_compile_error_any([[enum X {A, B}; enum(X) x;]])
 test_compile_error_any([[enum {intern : extern};]])
+
+test_compile_any([[
+  // GitHub pikelang/Pike #25.
+  typedef typeof(Val.true)|typeof(Val.false) bool;
+
+  int main (int argc, array(string) argv) {
+    bool a = Val.true;
+    return 0;
+  }
+]])
 
 // - modifiers, compile time type checks
 

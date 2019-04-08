@@ -3261,10 +3261,11 @@ PMOD_EXPORT void apply(struct object *o, const char *fun, int args)
 
 PMOD_EXPORT void apply_svalue(struct svalue *s, INT32 args)
 {
-  if(TYPEOF(*s) == T_INT)
+  if(IS_UNDEFINED(s))
   {
+    /* FIXME: Why? cf LysLysKOM 22891031. */
     pop_n_elems(args);
-    push_int(0);
+    push_undefined();
   }else{
     ptrdiff_t expected_stack=Pike_sp-args+1 - Pike_interpreter.evaluator_stack;
 

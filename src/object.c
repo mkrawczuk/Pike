@@ -135,6 +135,7 @@ PMOD_EXPORT struct object *low_clone(struct program *p)
   o=alloc_object();
 
   o->flags = 0;
+  o->inhibit_destruct = 0;
 
   if(p->flags & PROGRAM_USES_PARENT) {
     assert(p->storage_needed);
@@ -767,7 +768,7 @@ PMOD_EXPORT struct program *get_program_for_object_being_destructed(struct objec
   return 0;
 }
 
-static void call_destruct(struct object *o, enum object_destruct_reason reason)
+static int call_destruct(struct object *o, enum object_destruct_reason reason)
 {
   volatile int e;
 
@@ -778,7 +779,7 @@ static void call_destruct(struct object *o, enum object_destruct_reason reason)
       fprintf(stderr, "|   Not calling _destruct() in "
 	      "destructed %p with %d refs.\n", o, o->refs);
 #endif
-    return; /* Object already destructed */
+    return 0; /* Object already destructed */
   }
 
   e=FIND_LFUN(o->prog,LFUN__DESTRUCT);
@@ -832,10 +833,28 @@ static void call_destruct(struct object *o, enum object_destruct_reason reason)
       }
 
       else {
+	int ret;
 	push_int (reason);
 	apply_low(o, e, 1);
+	ret = !UNSAFE_IS_ZERO(Pike_sp-1);
 	pop_stack();
 	UNSETJMP (jmp);
+	if (ret && (reason == DESTRUCT_EXPLICIT) &&
+	    !master_is_cleaned_up) {
+	  /* Destruction inhibited by lfun::_destruct().
+	   *
+	   * Note: We still destruct the object if:
+	   *
+	   *   * It is not an explicit destruct().
+	   *
+	   *   * We are in the exit clean up phase.
+	   *
+	   * This means that lfun::_destruct() can protect
+	   * against destruction by adding a reference from
+	   * some place external and returning 1.
+	   */
+	  return 1;
+	}
       }
 
 #ifdef GC_VERBOSE
@@ -851,6 +870,7 @@ static void call_destruct(struct object *o, enum object_destruct_reason reason)
       fprintf(stderr, "|   No _destruct() to call in %p with %d refs.\n",
 	      o, o->refs);
 #endif
+  return 0;
 }
 
 static int object_has__destruct( struct object *o )
@@ -858,7 +878,8 @@ static int object_has__destruct( struct object *o )
     return QUICK_FIND_LFUN( o->prog, LFUN__DESTRUCT ) != -1;
 }
 
-PMOD_EXPORT void destruct_object (struct object *o, enum object_destruct_reason reason)
+PMOD_EXPORT int destruct_object (struct object *o,
+				 enum object_destruct_reason reason)
 {
   int e;
   struct program *p;
@@ -912,15 +933,16 @@ PMOD_EXPORT void destruct_object (struct object *o, enum object_destruct_reason 
 	Pike_interpreter.thread_state->flags &= inhibit_mask;
       }
 #endif
-      return;
+      return 0;
   }
   add_ref( o );
   if( object_has__destruct( o ) )
   {
-      call_destruct(o, reason);
-      /* destructed in _destruct() */
-      if(!(p=o->prog))
+      if(call_destruct(o, reason) || !(p=o->prog))
       {
+	  /* Destructed in _destruct(),
+	   * or destruction inhibited.
+	   */
           free_object(o);
 #ifdef PIKE_DEBUG
           UNSET_ONERROR(uwp);
@@ -930,7 +952,7 @@ PMOD_EXPORT void destruct_object (struct object *o, enum object_destruct_reason 
 	    Pike_interpreter.thread_state->flags &= inhibit_mask;
           }
 #endif
-          return;
+          return !!o->prog;
       }
       destruct_called = 1;
       get_destruct_called_mark(o)->p=p;
@@ -1055,6 +1077,8 @@ PMOD_EXPORT void destruct_object (struct object *o, enum object_destruct_reason 
 #ifdef PIKE_DEBUG
   UNSET_ONERROR(uwp);
 #endif
+
+  return 0;
 }
 
 
@@ -1118,7 +1142,7 @@ void low_destruct_objects_to_destruct(void)
 void destruct_objects_to_destruct_cb(void)
 {
   low_destruct_objects_to_destruct();
-  if(destruct_object_evaluator_callback)
+  if(destruct_object_evaluator_callback && !objects_to_destruct)
   {
     remove_callback(destruct_object_evaluator_callback);
     destruct_object_evaluator_callback=0;

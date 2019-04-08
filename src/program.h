@@ -802,7 +802,7 @@ extern struct program *gc_internal_program;
 
 /* Prototypes begin here */
 PMOD_EXPORT void do_free_program (struct program *p);
-void ins_int(INT32 i, void (*func)(char tmp));
+void ins_int(INT32 i, void (*func)(unsigned char tmp));
 void add_relocated_int_to_program(INT32 i);
 void use_module(struct svalue *s);
 void unuse_modules(INT32 howmany);
@@ -947,6 +947,7 @@ PMOD_EXPORT int add_object_constant(const char *name,
 			INT32 flags);
 PMOD_EXPORT int add_function_constant(const char *name, void (*cfun)(INT32), const char * type, int flags);
 PMOD_EXPORT int debug_end_class(const char *name, ptrdiff_t namelen, INT32 flags);
+int is_lfun_name(struct pike_string *name);
 INT32 define_function(struct pike_string *name,
 		      struct pike_type *type,
 		      unsigned flags,

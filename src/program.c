@@ -1768,7 +1768,7 @@ void PIKE_CONCAT(add_to_,NAME) (ARGTYPE ARG) {				\
     add_to_program(ARG);					\
   } while(0)
 
-void ins_int(INT32 i, void (*func)(char tmp))
+void ins_int(INT32 i, void (*func)(unsigned char tmp))
 {
   int e;
   unsigned char *p = (unsigned char *)&i;
@@ -1882,7 +1882,7 @@ static int add_identifier(struct compilation *c,
 void add_relocated_int_to_program(INT32 i)
 {
   add_to_relocations(Pike_compiler->new_program->num_program);
-  ins_int(i, (void (*)(char))add_to_program);
+  ins_int(i, add_to_program);
 }
 
 void use_module(struct svalue *s)
@@ -4091,12 +4091,37 @@ PMOD_EXPORT void dump_program_tables (const struct program *p, int indent)
     char *cnt = p->linenumbers;
 
     while (cnt < p->linenumbers + p->num_linenumbers) {
-      if (*cnt == 127) {
+      while (*cnt == 127) {
 	int strno;
 	cnt++;
 	strno = get_small_number(&cnt);
-	fprintf(stderr, "%*s  Filename: String #%d\n", indent, "", strno);
+	if (strno >= 0) {
+	  fprintf(stderr, "%*s  Filename: String #%d\n", indent, "", strno);
+	} else {
+	  int offset = ~strno;
+	  int kind = *(cnt++);
+	  strno = (kind >= 0)?get_small_number(&cnt):0;
+	  switch(kind) {
+	  case -1:	/* end */
+	    fprintf(stderr, "%*s  Variable #%d end\n", indent, "", offset);
+	    break;
+	  case 0:	/* name */
+	    fprintf(stderr, "%*s  Variable #%d name: string #%d\n",
+		    indent, "", offset, strno);
+	    break;
+	  case 1:	/* type */
+	    fprintf(stderr, "%*s  Variable #%d type: constant #%d\n",
+		    indent, "", offset, strno);
+	    break;
+	  default:
+	    fprintf(stderr, "%*s  Variable #%d unknown (%d): value: %d\n",
+		    indent, "", offset, kind, strno);
+	    break;
+	  }
+	}
+	if (cnt >= p->linenumbers + p->num_linenumbers) break;
       }
+      if (cnt >= p->linenumbers + p->num_linenumbers) break;
       off += get_small_number(&cnt);
       line += get_small_number(&cnt);
       fprintf(stderr, "%*s    %8d:%8ld\n", indent, "", off, (long)line);
@@ -5111,7 +5136,8 @@ PMOD_EXPORT void pike_set_prog_optimize_callback(node *(*opt)(node *))
  *   Reference number in q->new_program->inherit[i].prog.
  *
  * @return
- *   Returns an equivalent reference that is INLINE|HIDDEN.
+ *   Returns an equivalent reference that is INLINE (and HIDDEN if
+ *   a new reference was created).
  *
  *   Returns -1 if the referenced identifier is -1 or a prototype.
  */
@@ -5150,7 +5176,8 @@ PMOD_EXPORT int really_low_reference_inherited_identifier(struct program_state *
 
     if ((refp->inherit_offset == funp.inherit_offset) &&
 	(refp->identifier_offset == funp.identifier_offset) &&
-	((refp->id_flags | ID_USED) == (funp.id_flags | ID_USED))) {
+	((refp->id_flags & (ID_INLINE|ID_EXTERN|ID_VARIANT)) ==
+	 (funp.id_flags & (ID_INLINE|ID_EXTERN|ID_VARIANT)))) {
       return d;
     }
   }
@@ -6760,6 +6787,14 @@ PMOD_EXPORT int debug_end_class(const char *name, ptrdiff_t namelen, INT32 flags
   free_string(id);
   free_svalue(&tmp);
   return ret;
+}
+
+int is_lfun_name(struct pike_string *name)
+{
+  if (low_mapping_string_lookup(lfun_types, name)) {
+    return 1;
+  }
+  return 0;
 }
 
 /**
@@ -8421,19 +8456,56 @@ void store_linenumber(INT_TYPE current_line, struct pike_string *current_file)
 	  Pike_compiler->new_program->num_linenumbers)
     {
       char *start = cnt;
-      if(*cnt == 127)
+      while(*cnt == 127)
       {
 	int strno;
 	cnt++;
 	strno = get_small_number(&cnt);
-	CHECK_FILE_ENTRY (Pike_compiler->new_program, strno);
-	if (a_flag > 100) {
-	  file = Pike_compiler->new_program->strings[strno];
-	  fprintf(stderr, "Filename entry:\n"
-		  "  len: %"PRINTSIZET"d, shift: %d\n",
-		  file->len, file->size_shift);
+	if (strno >= 0) {
+	  CHECK_FILE_ENTRY (Pike_compiler->new_program, strno);
+	  if (a_flag > 100) {
+	    file = Pike_compiler->new_program->strings[strno];
+	    fprintf(stderr, "Filename entry:\n"
+		    "  len: %"PRINTSIZET"d, shift: %d\n",
+		    file->len, file->size_shift);
+	  }
+	} else {
+	  int offset = ~strno;
+	  int kind = *(cnt++);
+	  strno = (kind < 0)?-1:get_small_number(&cnt);
+	  if (a_flag > 100) {
+	    switch(kind) {
+	    case -1:	/* end */
+	      fprintf(stderr, "Variable end entry:\n"
+		      "  offset: 0x%04x\n", offset);
+	      break;
+	    case 0:	/* name */
+	      {
+		struct pike_string *var_name =
+		  Pike_compiler->new_program->strings[strno];
+		fprintf(stderr, "Variable name entry:\n"
+			"  offset: 0x%04x name: \"%.*s\"\n",
+			offset, (int)var_name->len, var_name->str);
+		break;
+	      }
+	    case 1:	/* type */
+	      fprintf(stderr, "Variable type entry:\n"
+		      "  offset: 0x%04x Type constant #%d\n",
+		      offset, strno);
+	      break;
+	    default:
+	      fprintf(stderr, "Unknown entry #%d\n"
+		      "  offset: 0x%04x Number: 0x%08x\n",
+		      kind, offset, (kind > 0)?strno:0);
+	      break;
+	    }
+	  }
 	}
+	if (cnt >= Pike_compiler->new_program->linenumbers +
+	    Pike_compiler->new_program->num_linenumbers) break;
       }
+      if (cnt >= Pike_compiler->new_program->linenumbers +
+	  Pike_compiler->new_program->num_linenumbers) break;
       off+=get_small_number(&cnt);
       line+=get_small_number(&cnt);
       if (a_flag > 100) {
@@ -8781,13 +8853,19 @@ PMOD_EXPORT char *low_get_line_plain (PIKE_OPCODE_T *pc, struct program *prog,
 
       while(cnt < prog->linenumbers + prog->num_linenumbers)
       {
-	if(*cnt == 127)
+	while(*cnt == 127)
 	{
 	  int strno;
 	  cnt++;
 	  strno = get_small_number(&cnt);
-	  CHECK_FILE_ENTRY (prog, strno);
-	  file = prog->strings[strno];
+	  if (strno >= 0) {
+	    CHECK_FILE_ENTRY (prog, strno);
+	    file = prog->strings[strno];
+	  } else {
+	    int frame_offset = ~strno;
+	    int kind = *(cnt++);
+	    strno = (kind < 0)?-1:get_small_number(&cnt);
+	  }
 	}
 	off+=get_small_number(&cnt);
 	if(off > offset) break;
@@ -8985,8 +9063,9 @@ void init_program(void)
 
   MAKE_CONST_STRING(compat_lfun_destroy_string, "destroy");
 
-  lfun_ids = allocate_mapping(NUM_LFUNS);
-  lfun_types = allocate_mapping(NUM_LFUNS);
+  /* NB: One extra entry needed for lfun::destroy(). */
+  lfun_ids = allocate_mapping(NUM_LFUNS + 1);
+  lfun_types = allocate_mapping(NUM_LFUNS + 1);
   for (i=0; i < NELEM(lfun_names); i++) {
     lfun_strings[i] = make_shared_static_string(lfun_names[i], strlen(lfun_names[i]), eightbit);
 
@@ -8996,7 +9075,19 @@ void init_program(void)
 
     SET_SVAL(val, T_TYPE, 0, type, make_pike_type(raw_lfun_types[i]));
     mapping_insert(lfun_types, &key, &val);
-    free_type(val.u.type);
+
+    if (i == LFUN__DESTRUCT) {
+      /* Special case for lfun::destroy(). */
+      SET_SVAL(key, T_STRING, 0, string, compat_lfun_destroy_string);
+      /* FIXME: Adjust the type to be __deprecated__? */
+      mapping_insert(lfun_types, &key, &val);
+      free_type(val.u.type);
+
+      SET_SVAL(id, T_INT, NUMBER_NUMBER, integer, i);
+      mapping_insert(lfun_ids, &key, &id);
+    } else {
+      free_type(val.u.type);
+    }
   }
 
   lfun_getter_type_string = make_pike_type(tFuncV(tNone, tVoid, tMix));
@@ -9562,8 +9653,9 @@ PMOD_EXPORT struct program *low_program_from_svalue(const struct svalue *s,
 						    struct object **parent_obj,
 						    int *parent_id)
 {
-  switch(TYPEOF(*s))
-  {
+  while(s) {
+    switch(TYPEOF(*s))
+    {
     case T_OBJECT:
     {
       struct program *p = s->u.object->prog;
@@ -9589,20 +9681,34 @@ PMOD_EXPORT struct program *low_program_from_svalue(const struct svalue *s,
       return p; /* We trust that there is a reference somewhere... */
     }
 
-  case T_FUNCTION:
-    if (SUBTYPEOF(*s) == FUNCTION_BUILTIN) return 0;
-    return low_program_from_function(*parent_obj = s->u.object,
-				     *parent_id = SUBTYPEOF(*s));
+    case T_FUNCTION:
+      if (SUBTYPEOF(*s) == FUNCTION_BUILTIN) return 0;
+      return low_program_from_function(*parent_obj = s->u.object,
+				       *parent_id = SUBTYPEOF(*s));
 
-  case T_PROGRAM:
-    return s->u.program;
+    case T_PROGRAM:
+      return s->u.program;
 
-  case PIKE_T_TYPE:
-    return program_from_type(s->u.type);
+    case PIKE_T_TYPE:
+      return program_from_type(s->u.type);
 
-  default:
-    return 0;
+    case PIKE_T_ARRAY:
+      if (!s->u.array->size) break;
+      /* Return result for the last element of the array.
+       *
+       * This is compatible with the corresponding behavior for inherit.
+       */
+      s =  ITEM(s->u.array) + s->u.array->size - 1;
+      continue;
+
+    default:
+      break;
+    }
+
+    break;
   }
+
+  return NULL;
 }
 
 /* NOTE: Does not add references to the return value! */
