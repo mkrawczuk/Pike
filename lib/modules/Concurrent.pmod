@@ -23,7 +23,7 @@ void on_failure(function(mixed : void) f)
 {
   global_on_failure = f;
 }
-protected function(mixed : void) global_on_failure;
+protected function(mixed : void) global_on_failure = master()->handle_error;
 
 //! @param enable
 //!   @int
@@ -91,8 +91,6 @@ class Future
 
   protected Pike.Backend backend;
 
-  protected array timeout_call_out_handle;
-
   //! Set the backend to use for calling any callbacks.
   //!
   //! @note
@@ -155,18 +153,7 @@ class Future
   //!   @[set_backend()], @[use_backend()]
   protected void call_callback(function cb, mixed ... args)
   {
-    if (timeout_call_out_handle) {
-      // Remove the timeout call_out, as it will not be relevant,
-      // but holds a reference to us.
-      (backend?backend->remove_call_out:remove_call_out)
-	(timeout_call_out_handle);
-      timeout_call_out_handle = UNDEFINED;
-    }
-    if (backend) {
-      backend->call_out(cb, 0, @args);
-    } else {
-      callout(cb, 0, @args);
-    }
+    (backend ? backend->call_out : callout)(cb, 0, @args);
   }
 
   //! Wait for fulfillment.
@@ -216,7 +203,7 @@ class Future
   //!   @[cb] will always be called from the main backend.
   //!
   //! @seealso
-  //!   @[on_failure()]
+  //!   @[on_failure()], @[query_success_callbacks()]
   this_program on_success(function(mixed, mixed ... : void) cb, mixed ... extra)
   {
     switch (state) {
@@ -230,6 +217,18 @@ class Future
         success_cbs += ({ ({ cb, @extra }) });
     }
     return this_program::this;
+  }
+
+  //! Query the set of active success callbacks.
+  //!
+  //! @returns
+  //!   Returns an array with callback functions.
+  //!
+  //! @seealso
+  //!   @[on_success()], @[query_failure_callbacks()]
+  array(function) query_success_callbacks()
+  {
+    return column(success_cbs, 0);
   }
 
   //! Register a callback that is to be called on failure.
@@ -246,7 +245,7 @@ class Future
   //!   @[cb] will always be called from the main backend.
   //!
   //! @seealso
-  //!   @[on_success()]
+  //!   @[on_success()], @[query_failure_callbacks()]
   this_program on_failure(function(mixed, mixed ... : void) cb, mixed ... extra)
   {
     switch (state) {
@@ -263,6 +262,18 @@ class Future
         failure_cbs += ({ ({ cb, @extra }) });
     }
     return this_program::this;
+  }
+
+  //! Query the set of active failure callbacks.
+  //!
+  //! @returns
+  //!   Returns an array with callback functions.
+  //!
+  //! @seealso
+  //!   @[on_failure()], @[query_success_callbacks()]
+  array(function) query_failure_callbacks()
+  {
+    return column(failure_cbs, 0);
   }
 
   //! Apply @[fun] with @[val] followed by the contents of @[ctx],
@@ -661,21 +672,43 @@ class Future
     return then(0, onrejected, @extra);
   }
 
+  private this_program setup_call_out(int|float seconds, void|int tout)
+  {
+    array call_out_handle;
+    Promise p = promise_factory();
+    void cancelcout(mixed value)
+    {
+      (backend ? backend->remove_call_out : remove_call_out)(call_out_handle);
+      p->try_success(0);
+    }
+    /* NB: try_* variants as the original promise may get fulfilled
+     *     after the timeout has occurred.
+     */
+    on_failure(cancelcout);
+    call_out_handle = (backend ? backend->call_out : call_out)
+      (p[tout ? "try_failure" : "try_success"], seconds,
+       tout && ({ "Timeout.\n", backtrace() }));
+    if (tout)
+      on_success(cancelcout);
+    return p->future();
+  }
+
   //! Return a @[Future] that will either be fulfilled with the fulfilled
   //! result of this @[Future], or be failed after @[seconds] have expired.
   this_program timeout(int|float seconds)
   {
-    Promise p = promise_factory();
-    on_failure(p->failure);
-    on_success(p->success);
-    if (timeout_call_out_handle) {
-      // Remove the previous timeout call_out.
-      (backend?backend->remove_call_out:remove_call_out)
-	(timeout_call_out_handle);
-    }
-    timeout_call_out_handle = (backend?backend->call_out:call_out)
-      (p->try_failure, seconds, ({ "Timeout.\n", backtrace() }));
-    return p->future();
+    return first_completed(
+     ({ this_program::this, setup_call_out(seconds, 1) })
+    );
+  }
+
+  //! Return a @[Future] that will be fulfilled with the fulfilled
+  //! result of this @[Future], but not until at least @[seconds] have passed.
+  this_program delay(int|float seconds)
+  {
+    return results(
+     ({ this_program::this, setup_call_out(seconds) })
+    )->map(`[], 0);
   }
 
   protected string _sprintf(int t)
@@ -702,7 +735,7 @@ protected class AggregateState
   final function(mixed, mixed, mixed ... : mixed) fold_fun;
   final array(mixed) extra;
 
-  private void create(Promise p)
+  protected void create(Promise p)
   {
     if (p->_materialised || p->_materialised++)
       error("Cannot materialise a Promise more than once.\n");
@@ -1140,7 +1173,7 @@ class Promise
   {
     // NB: Don't complain about dropping STATE_NO_FUTURE on the floor.
     if (state == STATE_PENDING)
-      try_failure(({ "Promise broken.\n", backtrace() }));
+      try_failure(({ sprintf("%O: Promise broken.\n", this), backtrace() }));
     if ((state == STATE_REJECTED) && global_on_failure)
       call_callback(global_on_failure, result);
     result = UNDEFINED;

@@ -1225,9 +1225,13 @@ static struct pike_type *lfun_setter_type_string = NULL;
  *!   @[predef::m_delete()]
  */
 
-/*! @decl predef::Iterator lfun::_get_iterator()
+/*! @decl predef::Iterator lfun::_get_iterator(mixed ... args)
  *!
  *!   Iterator creation callback.
+ *!
+ *! @param args
+ *!   Optional extra arguments as passed to @[get_iterator()].
+ *!   The implicit call from @[foreach()] does not provide any arguments.
  *!
  *!   The returned @[predef::Iterator] instance works as a cursor that
  *!   references a specific item contained (in some arbitrary sense)
@@ -5835,41 +5839,13 @@ void compiler_do_inherit(node *n,
 
   if(!n)
   {
-    yyerror("Unable to inherit");
+    yyerror("Unable to inherit.");
     return;
   }
 
   if (Pike_compiler->compiler_pass != COMPILER_PASS_FIRST) {
     /* Note off by one! */
     inherit_offset = Pike_compiler->num_inherits + 1;
-  }
-
-  if ((n->token == F_APPLY) && (CAR(n)->token == F_CONSTANT) &&
-      (TYPEOF(CAR(n)->u.sval) == T_FUNCTION) &&
-      (SUBTYPEOF(CAR(n)->u.sval) == FUNCTION_BUILTIN) &&
-      (CAR(n)->u.sval.u.efun->function == debug_f_aggregate)) {
-    /* Disambiguate multiple inherit ::-reference. */
-    node *arg;
-    while(1) {
-      while ((arg = CDR(n))) {
-	n = arg;
-	if (n->token != F_ARG_LIST) goto found;
-      }
-      /* Paranoia. */
-      if ((arg = CAR(n))) {
-	n = arg;
-	continue;
-      }
-      /* FIXME: Ought to go up a level and try the car there...
-       *        But as this code probably won't be reached, we
-       *        just fail.
-       */
-      yyerror("Unable to inherit");
-      return;
-    }
-  found:
-    /* NB: The traditional C grammar requires a statement after a label. */
-    ;
   }
 
   fix_type_field(n);
@@ -5879,7 +5855,7 @@ void compiler_do_inherit(node *n,
     yytype_report(REPORT_WARNING,
 		  n->current_file, n->line_number, inheritable_type_string,
 		  n->current_file, n->line_number, n->type,
-		  0, "Program required for inherit.\n");
+		  0, "Program required for inherit.");
   }
 
   switch(n->token)
@@ -5894,7 +5870,7 @@ void compiler_do_inherit(node *n,
 	  offset++;
 	}
 	if (!state) {
-	  yyerror("Failed to resolv external constant.\n");
+	  yyerror("Failed to resolv external constant.");
 	  return;
 	}
 	p = state->new_program;
@@ -5935,7 +5911,7 @@ void compiler_do_inherit(node *n,
 		      name);
 	}
       }else{
-	yyerror("Inherit identifier is not a constant program");
+	yyerror("Inherit identifier is not a constant program.");
 	return;
       }
       break;
@@ -6866,6 +6842,17 @@ INT32 define_function(struct pike_string *name,
 	}
       }
       c->lex.pragmas = orig_pragmas;
+
+      /* NB: define_function() is called multiple times... */
+      if (((flags & (ID_PROTECTED|ID_PRIVATE)) != ID_PROTECTED) && func &&
+	  !(orig_pragmas & ID_NO_DEPRECATION_WARNINGS) &&
+	  !deprecated_typep(type)) {
+	if (!(flags & (ID_PROTECTED|ID_PRIVATE))) {
+	  yywarning("Lfun %S is public.", name);
+	} else {
+	  yywarning("Lfun %S is private.", name);
+	}
+      }
     }
   } else if (((name->len > 3) &&
 	      (index_shared_string(name, 0) == '`') &&
