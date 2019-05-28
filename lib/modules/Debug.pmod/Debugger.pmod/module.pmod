@@ -4,7 +4,6 @@
 
 protected object debugger;
 mapping breakpoints = ([]);
-mapping program_cache = master()->program_cache;
 
 // TODO: we need to make sure that we don't accidentally create multiple breakpoints for the same code position.
 // also need to handle request for lines that don't exist.
@@ -32,14 +31,13 @@ variant object add_breakpoint(program p, string within_file, int line_number) {
 //! supports breakpoints on programs not yet loaded.
 variant object add_breakpoint(string filename, int line_number) {
 	object bp;
-    program p = master()->programs[filename];
-    if (!p) p = program_cache[filename];
-    if(!p) {
-      werror("could not find program %s. Deferring.\n", filename);
-  	bp = Breakpoint(filename, filename, line_number);
-    } else {
-      bp = Breakpoint(p, filename, line_number);
-    }
+  program p = master()->programs[filename];
+  if(!p) {
+    werror("could not find program %s. Deferring.\n", filename);
+	  bp = Breakpoint(filename, filename, line_number);
+  } else {
+    bp = Breakpoint(p, filename, line_number);
+  }
   breakpoints[bp] = 1;
   return bp;
 }
@@ -51,7 +49,6 @@ variant object add_breakpoint(string filename, int line_number) {
 variant object add_breakpoint(string filename, string within_file, int line_number) {
 	object bp;
   program p = master()->programs[filename];
-  if (!p) p = program_cache[filename];
   if(!p) {
     werror("could not find program %s. Deferring.\n", filename);
 	bp = Breakpoint(filename, within_file, line_number);

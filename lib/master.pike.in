@@ -33,7 +33,7 @@
 #endif /* PIKE_WARNINGS */
 
 int want_load_announcements = 0;
-#define PROGRAM_LOADED(A,B,C) (want_load_announcements?(A[B]=program_loaded(B, (C))):(A[B]=(C)))
+#define PROGRAM_LOADED(A,B,C) (want_load_announcements?(program_loaded(B, (C))):(A[B]=(C)))
 
 // --- Global constants and variables
 
@@ -3897,19 +3897,18 @@ protected mixed main_resolv(string sym, CompatResolver|void resolver) {
 // callback for completing breakpoint registration for programs which weren't loaded
 // at the time of the breakpoint's creation.
 function deferred_breakpoint_completer;
-mapping(string:program) program_cache = ([]);
 
 mixed program_loaded(string fn, mixed c) {
-    if (programp(c))
-         program_cache[fn] = c;
+  if (programp(c) && !programs[fn])
+    programs[fn] = c;
 
-    if(deferred_breakpoint_completer)
-         deferred_breakpoint_completer(fn, c);
+  if(deferred_breakpoint_completer)
+    deferred_breakpoint_completer(fn, c);
 
-     return c;
+  return c;
 }
 
-void load_debugger(int wait_seconds) {
+void load_debugger(int wait_seconds, int debugger_signal) {
    want_load_announcements = 1;
    set_debugger(1);
      // load the debugger support
@@ -3939,12 +3938,16 @@ void load_debugger(int wait_seconds) {
      d = main_resolv("Debug.Debugger.debug_server",
                          get_compilation_handler(compat_major, compat_minor));
     };
-
     if(!d){  werror("Unable to load debugger.\n");
 		throw(d);
     }
     debugger = d();
-    debugger->load_breakpoint(wait_seconds);
+    debugger->wait_seconds = wait_seconds;
+
+    if (debugger_signal)
+      signal(signum("SIGUSR1"), debugger->load_breakpoint);
+    else
+      debugger->load_breakpoint();
 }
 
 //! This function is called when all the driver is done with all setup
@@ -3995,7 +3998,8 @@ void _main(array(string(0..255)) orig_argv)
   Version cur_compat_ver;
 
   int have_debugger = 0;
-  int debugger_wait = 5; // 5 seconds by default
+  int debugger_wait = 0;
+  int debugger_signal = 0;
   
   if(sizeof(argv)>1 && sizeof(argv[1]) && argv[1][0]=='-')
   {
@@ -4027,8 +4031,9 @@ void _main(array(string(0..255)) orig_argv)
       ({"compiler_trace", NO_ARG,  ({"--compiler-trace"}), 0, 0}),
       ({"assembler_debug",MAY_HAVE_ARG, ({"--assembler-debug"}), 0, 0}),
       ({"optimizer_debug",MAY_HAVE_ARG, ({"--optimizer-debug"}), 0, 0}),
-      ({"debugger",          MAY_HAVE_ARG, ({"--debugger"}), 0, 1}),
-      ({"debugger_wait",          HAS_ARG, ({"--debugger-wait"}), 0, 1}),
+      ({"debugger",       MAY_HAVE_ARG, ({"--debugger"}), 0, 1}),
+      ({"debugger_wait",  HAS_ARG, ({"--debugger-wait"}), 0, 1}),
+      ({"debugger_signal",NO_ARG, ({"--debugger-signal"}), 0, 0}),
       ({"debug",          MAY_HAVE_ARG, ({"--debug"}), 0, 1}),
       ({"trace",          MAY_HAVE_ARG, ({"--trace"}), 0, 1}),
       ({"ignore",         MAY_HAVE_ARG, ({"-Dqdatplr"}), 0, 1}),
@@ -4083,12 +4088,19 @@ void _main(array(string(0..255)) orig_argv)
       case "debug":
 	    debug+=(int)q[i][1];
 	    break;
-	  case "debugger":
-	  	have_debugger = 1;
-	    break;
-	  case "debugger_wait":
-	    debugger_wait = (int)q[i][1];
-		break;
+
+      case "debugger":
+	have_debugger = 1;
+	break;
+
+      case "debugger_wait":
+	debugger_wait = (int)q[i][1];
+	break;
+
+      case "debugger_signal":
+        debugger_signal = 1;
+        break;
+  
       case "trace":
 	    trace+=(int)q[i][1];
 	    break;
@@ -4128,7 +4140,7 @@ void _main(array(string(0..255)) orig_argv)
     }
 	
 	if(have_debugger) {
-      load_debugger(debugger_wait);
+      load_debugger(debugger_wait, debugger_signal);
       set_debugger(1);
 	}
 	

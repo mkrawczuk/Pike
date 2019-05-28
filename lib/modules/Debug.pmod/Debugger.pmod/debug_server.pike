@@ -3,7 +3,7 @@
 
 import .Protocol;
 array(mixed) stackinfo;
-bool debug = false;
+bool debug = true;
 bool im_a_server = true;
 Stdio.Buffer obuf = Stdio.Buffer();
 bool attach = false;
@@ -322,25 +322,36 @@ void handle_action_request(mixed msg) {
 }
 
 void handle_breakpoints_request(mixed msg) {
-  // TODO
-  string path = msg->arguments->source->path;
-  array(int) lines = msg->arguments->lines;
-  foreach(Debug.Debugger.breakpoints; object bp;) {
-      catch { bp->disable(); };
-  }
-  foreach(lines, int line) {
-    mixed e = catch {
-        object bp = Debug.Debugger.add_breakpoint(path, line);
-        werror("bp eable: %O\n", bp->enable());
-    };
-    werror("error: %O\n", e);
-  }
+    // TODO
+    string path = msg->arguments->source->path;
+    array(int) lines = msg->arguments->lines;
+
+    foreach(Debug.Debugger.breakpoints; object bp;) {
+        catch { bp->disable(); };
+    }
+
+    foreach(lines, int line) {
+        mixed e = catch {
+            object bp = Debug.Debugger.add_breakpoint(path, line);
+            if(!bp->enable()) {
+	            program prog = bp->get_program();
+                // try set_program on nested programs
+                foreach(indices(prog), string pname)
+                    if(programp(prog[pname]) && bp->set_program(prog[pname]))
+                        break;
+	        }
+        };
+    }
+
     Request req = Request(msg);
     Response res = Response();
 
     res->request_seq = req->seq;
     res->success = 1;
     res->command = req->command;
+    res->body = ([
+        "breakpoints" : ({}) // TODO
+    ]);
 
     write_response(res);
 }
@@ -390,6 +401,7 @@ object breakpoint_hilfe;
 object bpbe;
 object bpbet;
 
+int wait_seconds;
 int mode = .BreakpointHilfe.CONTINUE;
 
 public void set_mode(int m) {
@@ -397,7 +409,7 @@ public void set_mode(int m) {
 }
 
 // pause up to wait_seconds for a debugger to connect before continuing
-public void load_breakpoint(int wait_seconds)
+public void load_breakpoint()
 {
     bpbe = Pike.Backend();
     bpbet = Thread.Thread(lambda(){ do { catch(bpbe(1000.0)); } while (1); });
@@ -431,14 +443,13 @@ void wait_timeout() {
 public int do_breakpoint(string file, int line, string opcode, object current_object, array bt)
 {
   if(!breakpoint_client) return 0;
-
-  stackinfo = reverse(bt[1..]);
+    werror("BT:\n%O", bt);
+  stackinfo = reverse(bt); //reverse(bt[1..]);
   // the object needs to be 'touched' in this scope, else it's optimized-out
   Stdio.File fd = Stdio.File("/dev/null");
   foreach(stackinfo, mixed frame) {
       fd->write("%O %O %O", frame->var_names, frame->var_types, frame->vars);
   }
-
   StoppedEvent evt = StoppedEvent();
   evt->body->reason = "breakpoint";
   evt->body->threadId = 1;
@@ -446,7 +457,8 @@ public int do_breakpoint(string file, int line, string opcode, object current_ob
   // TODO: what do we do if a breakpoint is hit and we already have a running hilfe session,
   // such as if a second thread encounters a bp?
   object key = bp_lock->lock();
-  breakpoint_cond = Thread.Condition();
+  if (!breakpoint_cond)
+    breakpoint_cond = Thread.Condition();
   breakpoint_cond->wait(key);
   key = 0;
   // now, we must wait for the hilfe session to end.
